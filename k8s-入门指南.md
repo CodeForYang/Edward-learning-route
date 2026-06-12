@@ -1880,101 +1880,603 @@ kind delete cluster
 
 ## Bonus：尝试 AWS EKS（可选）
 
-### 安装 eksctl
+> 🎯 本节目标：在 **东京（ap-northeast-1）** 区域创建 **2 个 EC2 节点** 的 EKS 集群，模拟真实运维场景。
+> 你将实操：多节点调度、节点维护（Cordon/Drain）、污点与容忍度、Cluster Autoscaler — 这些是 K8s 管理员每天都会面对的操作。
+
+---
+
+### 0. 💰 先看预算：在东京跑一个 EKS 集群要花多少钱？
+
+> ⚠️ 你已升级为 AWS 付费用户，以下为 **ap-northeast-1（东京）** 区域的**按量计费**价格，供你决策时参考。
+
+| 资源 | 规格 | 单价 | 月估费（730 h） | 说明 |
+| --- | --- | --- | --- | --- |
+| **EKS 控制平面** | 每集群 | $0.10/h | **$73.00** | 只要集群存在就收费，与节点数无关 |
+| **EC2 节点×2** | t3.small（2vCPU/2GB） | ~$0.0252/h×2 | **~$36.79** | 学习够用，见下文选项 |
+| **EC2 节点×2** | t3.medium（2vCPU/4GB） | ~$0.0504/h×2 | **~$73.58** | 推荐 — 跑完整 Demo 更宽裕 |
+| **EBS 根卷×2** | gp3, 30 GB | $0.09/GB-month×60GB | **~$5.40** | 每个节点默认 30 GB |
+| **ALB**（LoadBalancer） | 1 个 | ~$0.0252/h+LCU | **~$22** | 仅当创建 `type: LoadBalancer` 时产生 |
+| **NAT Gateway** | 1 个（eksctl 默认创建） | ~$0.062/h | **~$45.26** | ⚠️ 这是容易被忽略的大头！见下文 |
+
+**🔑 省钱的三个关键：**
+
+1. **节点类型选择** — 你的场景是学习，推荐 **t3.small（$0.025/h）** 或 **t3.medium（$0.05/h）**，性价比最高。
+2. **用完即删** — EKS 集群即使没有跑 Pod，控制平面的 $0.10/h 也在计费。**不使用时务必 `eksctl delete cluster`。**
+3. **注意 NAT Gateway** — eksctl 默认创建的 VPC 带 NAT Gateway（~$45/月），如果你用 `--vpc-nat-mode Disable` 可以省掉，但私网节点将无法访问外网（拉镜像需要加 `--with-oidc` 配合 ECR 或其他方案）。为简化，下面的教程使用 eksctl 默认配置（含 NAT）。
+
+**📊 不同配置的月成本估算（东京区域）：**
+
+| 配置 | EKS | EC2×2 | EBS×2 | ALB | NAT | **月合计** |
+| --- | --- | --- | --- | --- | --- | --- |
+| 🟢 **最省：2×t3.small + 不创建 LB** | $73 | $36.79 | $5.40 | $0 | $45 | **~$160** |
+| 🟡 **推荐：2×t3.medium + 创建 LB 体验** | $73 | $73.58 | $5.40 | $22 | $45 | **~$219** |
+| 🔴 **2×t3.large + LB** | $73 | $147.20 | $5.40 | $22 | $45 | **~$293** |
+
+> 💡 **短期体验建议**：完整跟着教程走一遍大约 2-3 小时，用 t3.small 节点 ≈ 花费 **$0.10（EKS）+ $0.05（EC2）× 3h = $0.25**。加上 EBS 和 NAT 的按小时比例 ≈ **不到 $1**。重点是**用完立刻删除**。
+
+---
+
+### 1. 前置准备
+
+#### 安装/更新工具
 
 ```bash
+# 安装或更新 eksctl
 brew install eksctl
+# 或升级
+brew upgrade eksctl
+
+# 安装 AWS CLI（如果还没有）
+brew install awscli
+
+# 验证
+eksctl version
+aws --version
+kubectl version --client
 ```
 
-### 创建 EKS 集群
-
-> ⚠️ **注意：EKS 免费额度**
-> - 2024 年起，AWS 提供 **EKS 免费套餐**：每个区域第一个集群的控制平面免费（最多 1 年）
-> - 但 Worker 节点（EC2）或 Fargate Pod 仍然按量计费
-> - **预计成本**：一个 t3.micro 节点跑几天约 $3-5
-> - **一定要在使用完后删除集群！**
+#### 配置 AWS 凭证
 
 ```bash
-# 创建 EKS 集群（最小配置）
+# 确保配置了东京区域
+aws configure
+# AWS Access Key ID [****************]: <你的 Key>
+# AWS Secret Access Key [****************]: <你的 Secret>
+# Default region name [us-east-1]: ap-northeast-1    ← 设为东京！
+# Default output format [json]: json
+
+# 验证身份
+aws sts get-caller-identity
+```
+
+---
+
+### 2. 在东京创建 EKS 集群（2 节点）
+
+#### 方式 A：一键创建（快速，适合首次体验）
+
+```bash
 eksctl create cluster \
-  --name my-k8s \
-  --region us-east-1 \
+  --name my-k8s-tokyo \
+  --region ap-northeast-1 \
   --nodegroup-name standard-workers \
-  --node-type t3.micro \
-  --nodes 1 \
-  --nodes-min 1 \
-  --nodes-max 2 \
-  --managed
+  --node-type t3.medium \
+  --nodes 2 \
+  --nodes-min 2 \
+  --nodes-max 4 \
+  --managed \
+  --version 1.31
 
-# 等待 15-20 分钟...
+# ⏳ 等待 15-20 分钟...
+# 这个期间 eksctl 在帮你做：
+#   1. 创建 CloudFormation 堆栈（VPC、子网、安全组）
+#   2. 创建 EKS 控制平面
+#   3. 创建托管节点组（Auto Scaling Group + 2 台 EC2）
+#   4. 配置 aws-auth ConfigMap
+#   5. 写入 kubeconfig
 ```
 
-### 切换 kubectl 上下文
+#### 方式 B：使用 YAML 配置文件（推荐，可重复使用）
 
-```bash
-# 切换到 EKS 集群
-kubectl config use-context arn:aws:eks:us-east-1:xxx:cluster/my-k8s
-
-# 查看节点（能看到 AWS 上的 EC2）
-kubectl get nodes
-
-# 部署刚才的 Demo（镜像需要推到 ECR 或者用公共镜像）
-```
-
-### 体验 LoadBalancer Service
-
-在 EKS 中，`type: LoadBalancer` 会真正创建一个 AWS ELB：
+创建 `eks-cluster.yaml`：
 
 ```yaml
-apiVersion: v1
-kind: Service
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
 metadata:
-  name: flask-lb
-spec:
-  selector:
-    app: flask
-  ports:
-    - port: 80
-      targetPort: 5000
-  type: LoadBalancer
+  name: my-k8s-tokyo
+  region: ap-northeast-1          # 东京区域
+  version: "1.31"
+
+managedNodeGroups:
+  - name: workers-1a              # 第一可用区
+    instanceType: t3.medium
+    desiredCapacity: 2
+    minSize: 2
+    maxSize: 4
+    availabilityZones: ["ap-northeast-1a"]
+    labels:
+      role: worker
+      zone: az1
+    tags:
+      Environment: learning
+
+  - name: workers-1c              # 第二可用区 — 高可用！
+    instanceType: t3.medium
+    desiredCapacity: 2
+    minSize: 2
+    maxSize: 4
+    availabilityZones: ["ap-northeast-1c"]
+    labels:
+      role: worker
+      zone: az2
+    tags:
+      Environment: learning
+
+# 如果你想省 NAT Gateway 费用（但注意：私网节点无法直接从外网拉镜像）
+# vpc:
+#   nat:
+#     mode: Disable
 ```
 
 ```bash
+# 用配置文件创建
+eksctl create cluster -f eks-cluster.yaml
+
+# 这种方式好处：可版本控制，重复创建一致的环境
+```
+
+#### 验证集群
+
+```bash
+# 查看 kubectl 上下文
+kubectl config current-context
+# 输出类似：arn:aws:eks:ap-northeast-1:123456789:cluster/my-k8s-tokyo
+
+# 查看节点
+kubectl get nodes -o wide
+# NAME                                                STATUS   ROLES    AGE   VERSION    INTERNAL-IP    EXTERNAL-IP     OS-IMAGE
+# ip-192-168-11-22.ap-northeast-1.compute.internal    Ready    <none>   5m    v1.31.xx   192.168.11.22   xx.xx.xx.xx    Amazon Linux 2
+# ip-192-168-33-44.ap-northeast-1.compute.internal    Ready    <none>   5m    v1.31.xx   192.168.33.44   xx.xx.xx.xx    Amazon Linux 2
+
+# 查看 AWS 上对应的 EC2（在另一个终端验证）
+aws ec2 describe-instances --region ap-northeast-1 \
+  --filters "Name=tag:eks:cluster-name,Values=my-k8s-tokyo" \
+  --query "Reservations[].Instances[].{ID:InstanceId,Type:InstanceType,State:State.Name,IP:PrivateIpAddress}" \
+  --output table
+```
+
+---
+
+### 3. 第一天：认识你的集群
+
+#### 3.1 看节点详情
+
+```bash
+# 节点标签
+kubectl describe node ip-192-168-11-22.ap-northeast-1.compute.internal | grep -A 5 "Labels:"
+
+# 节点资源容量
+kubectl describe node ip-192-168-11-22.ap-northeast-1.compute.internal | grep -A 10 "Capacity:"
+
+# 节点上的 Pod
+kubectl get pods --all-namespaces -o wide --field-selector spec.nodeName=ip-192-168-11-22.ap-northeast-1.compute.internal
+```
+
+#### 3.2 通过 SSM Session Manager 连接到 EC2（无需 SSH 密钥）
+
+AWS 托管的 EKS 节点默认安装了 SSM Agent，推荐使用 Session Manager 连接：
+
+```bash
+# 先找到节点的实例 ID（注意把 workers-1a 换成你的节点组名）
+INSTANCE_ID=$(aws ec2 describe-instances \
+  --region ap-northeast-1 \
+  --filters "Name=tag:eks:nodegroup-name,Values=workers-1a" \
+  --query "Reservations[*].Instances[*].InstanceId" \
+  --output text)
+echo $INSTANCE_ID
+
+# 启动 Session Manager 会话
+aws ssm start-session --region ap-northeast-1 --target $INSTANCE_ID
+
+# 进入后可以：
+sh-5.2$ sudo -i              # 切 root
+sh-5.2$ crictl ps            # 查看运行中的容器（containerd 容器运行时）
+sh-5.2$ crictl images        # 查看已拉取的镜像
+sh-5.2$ ctr -n k8s.io container ls   # crictl 的替代（某些节点可能未装 crictl）
+sh-5.2$ ctr -n k8s.io image ls       # 用 containerd 原生 CLI 查看镜像
+sh-5.2$ journalctl -u kubelet --no-pager | tail -20   # 查看 kubelet 日志
+sh-5.2$ cat /var/log/containers/*.log | tail -20      # 查看具体容器日志
+sh-5.2$ lsblk                # 查看磁盘（能看到 EBS 卷）
+sh-5.2$ exit                 # 退出 SSM
+```
+
+> 💡 SSM Session Manager 的好处：不需要管理 SSH 密钥对，基于 IAM 权限控制，所有操作都有 CloudTrail 审计日志。
+
+#### 3.3 在 AWS 控制台查看
+
+在浏览器打开（或直接点击以下链接）：
+
+- **EKS 控制台** — 查看集群状态和节点组
+- **EC2 控制台** — 查看实际的虚拟机实例
+- **CloudFormation** — 查看 eksctl 创建的堆栈
+
+> 链接：`https://console.aws.amazon.com/eks/home?region=ap-northeast-1`
+
+---
+
+### 4. 第二天：真实世界的多节点运维
+
+#### 4.1 部署我们之前造的 Demo 应用
+
+```bash
+# 在本地重建 ~/k8s-demo 或直接使用公共 Nginx 镜像
+kubectl create deployment web-demo --image=nginx:alpine --replicas=6
+
+# 看看 Pod 是怎么分布在 2 个节点上的
+kubectl get pods -o wide
+# NAME                       READY   STATUS    RESTARTS   AGE   IP               NODE
+# web-demo-6b5f8f7d89-9abc   1/1     Running   0          10s   192.168.11.50    ip-192-168-11-22
+# web-demo-6b5f8f7d89-9def   1/1     Running   0          10s   192.168.33.60    ip-192-168-33-44
+# web-demo-6b5f8f7d89-9ghi   1/1     Running   0          10s   192.168.33.61    ip-192-168-33-44
+# web-demo-6b5f8f7d89-9jkl   1/1     Running   0          10s   192.168.11.51    ip-192-168-11-22
+# ...
+
+# 看到没？K8s Scheduler 自动把 6 个副本分布到 2 个节点！
+```
+
+#### 4.2 🛠️ 节点维护：Cordon & Drain（日常高频操作！）
+
+**场景**：给一台 EC2 打安全补丁，需要将上面的 Pod 赶走。
+
+```bash
+# 第一步：标记节点为不可调度（新的 Pod 不会调度上来）
+kubectl cordon ip-192-168-33-44.ap-northeast-1.compute.internal
+# node/ip-192-168-33-44.ap-northeast-1.compute.internal cordoned
+
+# 查看节点状态（变为 SchedulingDisabled）
+kubectl get nodes
+# NAME                     STATUS                     ROLES    AGE
+# ip-192-168-11-22         Ready                      <none>   1h
+# ip-192-168-33-44         Ready,SchedulingDisabled   <none>   1h   ← 注意变化
+
+# 第二步：驱逐该节点上的 Pod（滚动到另一个节点）
+kubectl drain ip-192-168-33-44.ap-northeast-1.compute.internal \
+  --ignore-daemonsets \
+  --delete-emptydir-data
+
+# 观察 Pod 迁移
+kubectl get pods -o wide -w
+# 你会看到：被驱逐的 Pod Terminating → 新的 Pod 在另一个节点上 Running ✅
+
+# 假设补丁打完了，恢复节点
+kubectl uncordon ip-192-168-33-44.ap-northeast-1.compute.internal
+# node/ip-192-168-33-44.ap-northeast-1.compute.internal uncordoned
+
+# 新的 Pod 现在又可以调度上去了
+```
+
+> ⚠️ **关键理解**：`cordon` 只阻止新 Pod 调度，`drain` 才会驱逐已有 Pod。
+> 生产流程：`cordon → drain → 运维操作 → uncordon`
+
+#### 4.3 🏷️ Taints & Tolerations（给节点打污点）
+
+**场景**：有些节点是"特殊"的（比如有 GPU、SSD），只有特定应用能用。
+
+```bash
+# 给一个节点打污点：只有 toleration 的 Pod 才能上去
+kubectl taint nodes ip-192-168-11-22.ap-northeast-1.compute.internal dedicated=gpu:NoSchedule
+
+# 创建一个没有 toleration 的 Pod → 它不会被调度到该节点
+kubectl run test-regular --image=nginx --restart=Never
+kubectl get pod test-regular -o wide  # 你会发现它在另一个节点上
+
+# 创建带有 toleration 的 Pod → 它可以上去
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-gpu
+spec:
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: gpu
+      effect: NoSchedule
+  containers:
+    - name: nginx
+      image: nginx:alpine
+EOF
+
+kubectl get pod test-gpu -o wide  # Pod 被调度到了带污点的节点 ✅
+
+# 清理污点
+kubectl taint nodes ip-192-168-11-22.ap-northeast-1.compute.internal dedicated=gpu:NoSchedule-
+```
+
+#### 4.4 🎯 Node Affinity（偏好调度）
+
+**场景**：你想让某些 Pod 优先跑到某台机器上（比如离 Redis 近的节点）。
+
+```bash
+# 给节点贴标签
+kubectl label nodes ip-192-168-11-22.ap-northeast-1.compute.internal disk-type=ssd
+
+# 创建节点亲和性的 Deployment
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: affinity-demo
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: affinity-demo
+  template:
+    metadata:
+      labels:
+        app: affinity-demo
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: disk-type
+                    operator: In
+                    values:
+                      - ssd
+      containers:
+        - name: app
+          image: nginx:alpine
+EOF
+
+# 观察调度
+kubectl get pods -o wide
+```
+
+> 💡 nodeAffinity 常用类型：
+> - `requiredDuringSchedulingIgnoredDuringExecution`：**硬性要求**，必须匹配
+> - `preferredDuringSchedulingIgnoredDuringExecution`：**软偏好**，尽量匹配
+
+#### 4.5 📈 演示 Cluster Autoscaler
+
+**场景**：流量突增，Pod 太多，现有节点不够了 → 自动增加 EC2。
+
+EKS 托管节点组自带 Cluster Autoscaler 支持：
+
+```bash
+# 1. 安装 IAM OIDC Provider（搭桥，让 AWS 信任 EKS 签发的 Token）
+eksctl utils associate-iam-oidc-provider \
+  --region ap-northeast-1 \
+  --cluster my-k8s-tokyo \
+  --approve
+
+# 2. （⚠️ 易遗漏！）创建 IAM 角色并绑定到 Service Account
+#    这样 Cluster Autoscaler Pod 才能拿到权限去调用 AWS API 创建 EC2
+eksctl create iamserviceaccount \
+  --cluster my-k8s-tokyo \
+  --namespace kube-system \
+  --name cluster-autoscaler \
+  --attach-policy-arn arn:aws:iam::aws:policy/AmazonEKSClusterAutoscalerPolicy \
+  --override-existing-serviceaccounts \
+  --approve
+
+# 3. 部署 Cluster Autoscaler
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/autoscaler/master/cluster-autoscaler/cloudprovider/aws/examples/cluster-autoscaler-autodiscover.yaml
+
+# 4. 给 Cluster Autoscaler 打上注解（指定集群名）
+kubectl -n kube-system annotate deployment.apps/cluster-autoscaler \
+  cluster-autoscaler.kubernetes.io/safe-to-evict="false"
+
+# 5. 编辑 Deployment，将 <YOUR CLUSTER NAME> 替换为 my-k8s-tokyo
+kubectl -n kube-system edit deployment.apps/cluster-autoscaler
+# 找到 --node-group-auto-discovery 那一行，修改 clusterName
+
+# 6. 触发扩容测试
+kubectl scale deployment web-demo --replicas=50
+
+# 观察节点数自动增加
+kubectl get nodes -w
+# 几分钟后你会看到新的 EC2 被创建并加入集群 🚀
+
+# 7. 缩回去
+kubectl scale deployment web-demo --replicas=3
+# 等待几分钟，多余节点会被 Cluster Autoscaler 自动回收
+```
+
+#### 4.6 从本地 Kind 切换到 EKS
+
+```bash
+# 查看所有上下文（EKS 上下文名格式：<用户名>@<集群名>.<区域>.eksctl.io）
+kubectl config get-contexts
+
+# 切换到 EKS（把 <用户名> 换成你的 IAM 用户名）
+kubectl config use-context <用户名>@my-k8s-tokyo.ap-northeast-1.eksctl.io
+
+# 切回 Kind（把 my-cluster 换成你的 Kind 集群名）
+kubectl config use-context kind-my-cluster
+
+# 或者用别名快速切换（先查好你的上下文名）
+alias k8s-kind='kubectl config use-context kind-my-cluster'
+alias k8s-eks='kubectl config use-context <用户名>@my-k8s-tokyo.ap-northeast-1.eksctl.io'
+
+# 加入 shell 配置文件（zshrc）方便以后使用
+echo 'alias k8s-kind="kubectl config use-context kind-${KIND_CLUSTER_NAME}"' >> ~/.zshrc
+echo 'alias k8s-eks="kubectl config use-context <用户名>@my-k8s-tokyo.ap-northeast-1.eksctl.io"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+---
+
+### 5. 体验 LoadBalancer Service
+
+在 EKS 中，`type: LoadBalancer` 会真正创建一个 **AWS ALB（应用负载均衡器）**：
+
+```bash
+# 先确保有运行中的 Pod
+kubectl get pods
+
+# 创建 LoadBalancer Service
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Service
 metadata:
-  name: flask-lb
+  name: web-lb
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: external
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
 spec:
   selector:
-    app: flask
+    app: web-demo
   ports:
     - port: 80
-      targetPort: 5000
+      targetPort: 80
   type: LoadBalancer
 EOF
 
-# 等待获取 External IP
-kubectl get svc flask-lb -w
-# NAME       TYPE           CLUSTER-IP     EXTERNAL-IP                                 PORT(S)
-# flask-lb   LoadBalancer   10.100.20.10   xxxxx.us-east-1.elb.amazonaws.com           80:30123/TCP
+# 等待分配 DNS 名称（通常 1-2 分钟）
+kubectl get svc web-lb -w
+# NAME     TYPE           CLUSTER-IP     EXTERNAL-IP                                                             PORT(S)
+# web-lb   LoadBalancer   10.100.20.10   xxxxx-xxxxx.ap-northeast-1.elb.amazonaws.com                            80:30123/TCP
 
-# 用浏览器访问 EXTERNAL-IP ✨
+# 用浏览器或 curl 访问
+curl http://xxxxx-xxxxx.ap-northeast-1.elb.amazonaws.com
+
+# 验证负载均衡效果（连续请求，看到两个 Pod 的 IP 轮流响应）
+for i in {1..10}; do
+  kubectl get pods -o wide | grep web-demo
+  curl -s http://xxxxx-xxxxx.ap-northeast-1.elb.amazonaws.com | head -1
+done
 ```
 
-### 清理 EKS 集群
+> 💡 **对比 Kind**：在 Kind 中 NodePort 只能通过 `port-forward` 访问，而 EKS 上的 LoadBalancer 会创建真正的 AWS 负载均衡器，让外部直接访问你的应用。
+
+---
+
+### 6. 故障演练：模拟节点故障
+
+#### 场景一：手动停止一台 EC2
+
+不要通过 kubectl 删除节点，而是去 AWS 控制台或 CLI 停止一个 EC2 实例：
 
 ```bash
-# 非常重要！用完立刻删除，否则持续收费
-eksctl delete cluster --name my-k8s --region us-east-1
+# 找到节点对应的 EC2 实例 ID
+NODE_NAME=$(kubectl get nodes -o json | jq -r '.items[0].metadata.name')
+echo "K8s 节点名: $NODE_NAME"
+
+# 从节点名找到 AWS EC2 实例 ID（格式：i-xxxx）
+INSTANCE_ID=$(aws ec2 describe-instances \
+  --region ap-northeast-1 \
+  --filters "Name=private-dns-name,Values=${NODE_NAME}" \
+  --query "Reservations[0].Instances[0].InstanceId" \
+  --output text)
+echo "EC2 实例 ID: $INSTANCE_ID"
+
+# 在另一个终端观察
+kubectl get nodes -w
+
+# 停止该 EC2 实例（模拟节点故障）
+aws ec2 stop-instances \
+  --region ap-northeast-1 \
+  --instance-ids $INSTANCE_ID
+
+# 观察：
+# 1. kubectl 中节点状态变为 NotReady
+# 2. 该节点上的 Pod 先变成 Unknown，然后被重新调度到另一个节点
+# 3. 如果是托管节点组，Auto Scaling Group 会自动重建一台新的 EC2 🎉
+
+kubectl get pods -o wide -w
 ```
+
+#### 场景二：观察 Pod 重新调度
+
+```bash
+# 在一个窗口观察 Pod 状态
+kubectl get pods -o wide -w
+
+# 在另一个窗口删除一个节点上的所有 Pod 模拟
+kubectl delete pod --all --field-selector spec.nodeName=<某个节点名>
+# 看 Deployment 的控制器自动重建 ✅
+```
+
+---
+
+### 7. 清理（非常重要！）
+
+```bash
+# 方式一：一键删除整个集群（推荐）
+eksctl delete cluster --name my-k8s-tokyo --region ap-northeast-1
+
+# 方式二：如果使用 YAML 配置文件创建
+eksctl delete cluster -f eks-cluster.yaml
+
+# 验证清理完成
+kubectl config get-contexts          # 应该看到 EKS 上下文已消失
+aws ec2 describe-instances \
+  --region ap-northeast-1 \
+  --filters "Name=tag:eks:cluster-name,Values=my-k8s-tokyo"  # 应该返回空
+```
+
+> ⚠️ **eksctl delete cluster 会清理哪些资源：**
+> - ✅ EKS 控制平面
+> - ✅ 所有 EC2 节点
+> - ✅ Auto Scaling Group
+> - ✅ VPC + 子网 + 安全组
+> - ✅ NAT Gateway + 弹性 IP
+> - ✅ ALB / NLB（ELB）
+> - ✅ IAM 角色和策略
+> - ✅ CloudFormation 堆栈
+
+---
+
+### 8. 💳 东京区域 EKS 详细成本分析
+
+#### AWS 付费计费项（东京 ap-northeast-1）
+
+以下为 2025/2026 年参考价格，实际以 [AWS 定价页面](https://aws.amazon.com/eks/pricing/) 为准：
+
+| 组件 | 计费方式 | 单价 | 2 小时体验 | 1 天（8h） | 1 个月（730h） |
+| --- | --- | --- | --- | --- | --- |
+| **EKS 控制平面** | 按小时 | $0.10/h | $0.20 | $0.80 | $73.00 |
+| **EC2 t3.small×2** | 按小时 | ~$0.0252/h | $0.10 | $0.40 | $36.79 |
+| **EC2 t3.medium×2** | 按小时 | ~$0.0504/h | $0.20 | $0.81 | $73.58 |
+| **EBS gp3 30GB×2** | 按 GB/月 | $0.09/GB/月 | — | $0.03 | $5.40 |
+| **ALB（可选）** | 按小时+LCU | ~$0.0252/h | $0.05 | $0.20 | ~$22 |
+| **NAT Gateway×1** | 按小时 | ~$0.062/h | $0.12 | $0.50 | $45.26 |
+| **数据传输** | 按 GB | 出站 $0.09/GB 起 | 忽略 | 忽略 | 视流量 |
+
+#### 实战成本预估（短期学习）
+
+| 场景 | EC2 规格 | 使用时长 | 预估总费用 |
+| --- | --- | --- | --- |
+| 🟢 最低体验 | t3.small×2，无 LB | 3 小时 | **~$0.80** |
+| 🟡 完整教程 | t3.medium×2，含 LB | 3 小时 | **~$1.05** |
+| 🔵 长期实验 | t3.small×2，无 LB | 一周（~20h 实际使用） | **~$5.30** |
+
+> 💡 **省钱核心**：
+> 1. **用完即删集群**：不删的话，即使所有 Pod 删光，EKS 控制平面和 NAT Gateway 也在计费
+> 2. **不使用 LoadBalancer**：不创建 LoadBalancer 类型的 Service 就不会产生 ALB/NLB 费用
+> 3. **t3.small 够学习用**：2 个 t3.small 总共 4GB 内存，跑几个 Nginx 或你的 Flask Demo 完全够用
+> 4. **善用 `kubectl` 操作**：大部分学习和探索可以通过 kubectl 完成，不需要长时间开着集群
+
+---
 
 ### ✅ Bonus 成果检查
 
-- [ ] 成功创建了 EKS 集群
-- [ ] 在 EKS 上体验了 LoadBalancer Service
-- [ ] 访问了通过 AWS ELB 暴露的应用
-- [ ] 💰 删除集群，避免产生费用
+- [ ] 在 ap-northeast-1（东京）创建了 2 节点的 EKS 集群
+- [ ] 能通过 SSM Session Manager 连接到 EC2 节点查看日志
+- [ ] 观察了 Pod 在 2 个节点上的调度分布
+- [ ] 掌握了 `cordon / drain / uncordon` 节点维护流程
+- [ ] 理解了 Taints & Tolerations 的用途（特殊节点限制调度）
+- [ ] 尝试了 nodeAffinity 定向调度
+- [ ] 在 EKS 上体验了 LoadBalancer Service（真正的 AWS ALB）
+- [ ] 模拟了节点故障，观察了 Pod 重新调度
+- [ ] 💰 理解了东京区域的成本结构并**清理了集群**
 
 ---
 
