@@ -219,6 +219,8 @@ terraform destroy
 # 本地文件 hello.txt 被删除 ✅
 ```
 
+> ⚠️ **`terraform destroy` 是不可逆操作**。它会删除所有当前 Terraform 项目管理的资源。在真实云环境中，这意味着服务器、数据库、存储都会被彻底删除，**无法恢复**。始终在操作前通过 `terraform plan` 确认要删除的内容，生产环境务必三思后行。
+
 ### 1.6 K8s vs Terraform 操作对比
 
 | 操作 | K8s 命令 | Terraform 命令 |
@@ -230,13 +232,31 @@ terraform destroy
 | 查看状态 | `kubectl get` | `terraform show` |
 | 查看当前配置 | `kubectl get -o yaml` | `terraform state list` |
 
+### 📌 建立好习惯：每天都用 `fmt` + `validate`
+
+从今天开始，把下面两个命令变成肌肉记忆：
+
+```bash
+# 1. 格式化代码（类似 prettier / gofmt）
+terraform fmt
+# 自动修正所有 .tf 文件的缩进、空格对齐，让团队代码风格统一
+
+# 2. 检查语法（类似编译器的类型检查）
+terraform validate
+# 检查 HCL 语法、属性名称、类型是否匹配
+# 能在 apply 之前发现大部分低级错误
+```
+
+> 💡 建议把这两个命令写入你的编辑器保存钩子或 pre-commit hook，这样每次修改代码后自动检查。
+
 ### ✅ Day 1 学习成果检查
 
 - [ ] 理解了什么是 IaC 和声明式配置
 - [ ] 安装了 Terraform
 - [ ] 跑通了第一个例子（创建/查看/销毁本地文件）
 - [ ] 理解了 Desired State vs Current State 的概念
-- [ ] 理解了 `terraform init` / `plan` / `apply` / `destroy` 的基本流程
+- [ ] 理解了 `terraform init` / `plan` / `apply` / `destroy` / `fmt` / `validate` 的基本流程
+- [ ] 养成了编写代码后先 `terraform fmt` 再 `terraform validate` 的习惯
 
 ---
 
@@ -350,7 +370,61 @@ resource "aws_instance" "web" {
 
 > 💡 **最佳实践**：尽量用自然引用（隐式依赖），少用 `depends_on`。依赖关系越明确，Terraform 的执行计划越高效。
 
-### 2.5 常用内置函数
+### 2.5 `count` vs `for_each`——批量创建资源
+
+Terraform 提供两种批量创建资源的机制，**适用场景完全不同**：
+
+```hcl
+# ──── count：按"编号"创建一组相似的资源 ────
+# 适合：所有副本配置完全一样
+
+variable "subnet_cidrs" {
+  type    = list(string)
+  default = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+}
+
+resource "aws_subnet" "by_count" {
+  count      = length(var.subnet_cidrs)     # 创建 3 个子网
+  vpc_id     = aws_vpc.main.id
+  cidr_block = var.subnet_cidrs[count.index] # 用 count.index 取编号
+}
+
+# ──── for_each：按"键"管理一组不同的资源 ────
+# 适合：每个副本的配置不同，需要通过"键"来引用
+
+variable "subnet_configs" {
+  type = map(object({
+    cidr = string
+    az   = string
+  }))
+  default = {
+    "subnet-a" = { cidr = "10.0.1.0/24", az = "ap-northeast-1a" }
+    "subnet-b" = { cidr = "10.0.2.0/24", az = "ap-northeast-1c" }
+  }
+}
+
+resource "aws_subnet" "by_for_each" {
+  for_each         = var.subnet_configs
+  vpc_id           = aws_vpc.main.id
+  cidr_block       = each.value.cidr          # each.value 取当前项的值
+  availability_zone = each.value.az
+  tags = {
+    Name = each.key                            # each.key 取当前项的键
+  }
+}
+```
+
+**为什么这个区别很重要？**
+
+| 场景 | 用 `count` | 用 `for_each` |
+|------|-----------|--------------|
+| 列表中间插了一个元素 | 所有后续资源的 `count.index` 变化 → 会触发更新/重建 ❌ | 键不变 → 不受影响 ✅ |
+| 删除列表中某个元素 | 需要手动 `terraform state rm` 移除旧的 | 自动移除对应的键 |
+| 从代码中引用某个资源 | `aws_subnet.by_count[1]`（下标脆弱） | `aws_subnet.by_for_each["subnet-b"]`（键稳定） |
+
+> 💡 **经验法则**：如果资源列表可能会增删改（大多数真实场景），优先用 `for_each`。只在你确定列表永远不变的场景下用 `count`。
+
+### 2.6 常用内置函数
 
 ```hcl
 locals {
@@ -586,6 +660,315 @@ resource "aws_instance" "web" {
 > - `var` = 外部输入的参数（用户赋值）
 > - `local` = 内部计算的中间值（由其他变量计算得来）
 
+### 3.5 综合实操演练
+
+把前面学到的变量、输出、数据源、本地值全部放到一个完整的例子里，**不花钱就能跑通**。
+
+---
+
+#### 📁 文件结构
+
+```
+~/terraform-learning/
+├── day3-demo.tf          # 主配置（复制下面的完整代码）
+├── terraform.tfvars      # 变量值文件
+└── terraform.tfstate     # 自动生成（State 文件）
+```
+
+---
+
+#### 📄 创建 `day3-demo.tf`
+
+```hcl
+# ============================================================
+# Day 3 实操练习：变量 + 输出 + 数据源 + 本地值
+# ============================================================
+# 练习目标：
+#   1. 定义多种类型的变量（string / number / bool / list / map / object）
+#   2. 使用变量校验（validation）
+#   3. 使用本地值（locals）计算中间值
+#   4. 使用数据源（data）读取已有资源
+#   5. 使用输出（output）暴露结果
+# ============================================================
+
+terraform {
+  required_providers {
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.5"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+
+# ─────────────────────────────────────
+# 1. 变量（Variable）—— 定义输入参数
+# ─────────────────────────────────────
+
+variable "project_name" {
+  description = "项目名称"
+  type        = string
+  default     = "terraform-day3"
+}
+
+variable "environment" {
+  description = "运行环境"
+  type        = string
+  # ⚠️ 注意：没有 default，apply 时必须赋值，否则 Terraform 会提示输入
+
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "环境必须是 dev、staging 或 prod 之一。"
+  }
+}
+
+variable "replicas" {
+  description = "实例副本数"
+  type        = number
+  default     = 1
+}
+
+variable "enable_monitoring" {
+  description = "是否启用监控"
+  type        = bool
+  default     = true
+}
+
+variable "tags" {
+  description = "资源标签"
+  type        = map(string)
+  default = {
+    Owner = "terraform-learner"
+  }
+}
+
+variable "availability_zones" {
+  description = "可用区列表"
+  type        = list(string)
+  default     = ["ap-northeast-1a", "ap-northeast-1c"]
+}
+
+variable "instance_config" {
+  description = "实例配置"
+  type = object({
+    size = string
+    disk = number
+  })
+  default = {
+    size = "t3.micro"
+    disk = 20
+  }
+}
+
+# ─────────────────────────────────────
+# 2. 本地值（Local）—— 计算中间值
+# ─────────────────────────────────────
+
+locals {
+  # string 拼接
+  full_name = "${var.project_name}-${var.environment}"
+
+  # 条件表达式（三目运算）
+  log_level = var.environment == "prod" ? "warn" : "debug"
+
+  # 数字运算：prod 环境副本数翻倍
+  replica_count = var.environment == "prod" ? var.replicas * 2 : var.replicas
+
+  # 合并 map
+  all_tags = merge(var.tags, {
+    Name        = local.full_name
+    Environment = var.environment
+    Monitoring  = var.enable_monitoring ? "on" : "off"
+  })
+
+  # for 表达式遍历列表
+  formatted_zones = [for az in var.availability_zones : upper(az)]
+}
+
+# ─────────────────────────────────────
+# 3. 资源（Resource）—— 创建资源
+# ─────────────────────────────────────
+
+resource "random_string" "suffix" {
+  length  = 8
+  special = false
+  upper   = false
+}
+
+resource "local_file" "config" {
+  content = <<-EOF
+# ${local.full_name} 配置文件
+project=${var.project_name}
+env=${var.environment}
+log_level=${local.log_level}
+replicas=${local.replica_count}
+instance_size=${var.instance_config.size}
+disk_size=${var.instance_config.disk}
+monitoring=${var.enable_monitoring}
+zones=${join(", ", local.formatted_zones)}
+suffix=${random_string.suffix.result}
+EOF
+  filename = "${path.module}/${local.full_name}.conf"
+}
+
+resource "local_file" "tags" {
+  content  = jsonencode(local.all_tags)
+  filename = "${path.module}/${local.full_name}-tags.json"
+}
+
+# ─────────────────────────────────────
+# 4. 数据源（Data）—— 读取已有资源
+# ─────────────────────────────────────
+
+data "local_file" "config_content" {
+  filename = local_file.config.filename
+}
+
+# ─────────────────────────────────────
+# 5. 输出（Output）—— 暴露结果
+# ─────────────────────────────────────
+
+output "generated_config" {
+  value       = local_file.config.filename
+  description = "生成的配置文件路径"
+}
+
+output "config_file_content" {
+  value       = data.local_file.config_content.content
+  description = "配置文件内容"
+}
+
+output "final_tags" {
+  value       = local.all_tags
+  description = "最终合并后的标签"
+}
+
+output "replica_count" {
+  value       = local.replica_count
+  description = "根据环境计算的副本数"
+}
+
+output "formatted_availability_zones" {
+  value       = local.formatted_zones
+  description = "大写格式化后的可用区"
+}
+
+output "db_connection_string" {
+  value       = "postgresql://admin:${random_string.suffix.result}@${local.full_name}.rds.amazonaws.com:5432/appdb"
+  description = "数据库连接字符串"
+  sensitive   = true
+}
+```
+
+---
+
+#### 📄 创建 `terraform.tfvars`
+
+```hcl
+# ─────────────────────────────────────
+# 变量值文件：覆盖变量的默认值
+# ─────────────────────────────────────
+environment = "staging"
+replicas    = 2
+tags = {
+  Owner   = "terraform-learner"
+  Team    = "platform"
+}
+
+# 你也可以试试改成这些值再跑一次：
+# environment = "prod"
+# replicas    = 3
+```
+
+> 💡 `environment` 变量没有设 `default`，所以必须通过 `terraform.tfvars`（或 `-var` / 环境变量）提供值，否则 Terraform 会在 `apply` 时交互式提示输入——这是故意设计的，让你体验变量必须赋值的场景。
+
+---
+
+#### ▶️ 运行步骤
+
+```bash
+cd ~/terraform-learning
+
+# 如果之前 Day 2 的资源还在，先清理
+terraform destroy
+
+# 1️⃣ 初始化（下载 provider 插件）
+terraform init
+
+# 2️⃣ 预览执行计划
+terraform plan
+
+# 3️⃣ 执行（会自动读取 terraform.tfvars）
+terraform apply
+# 输入 yes
+
+# 4️⃣ 查看生成的文件
+ls *.conf *.json
+cat terraform-day3-staging.conf
+cat terraform-day3-staging-tags.json
+
+# 5️⃣ 查看所有输出
+terraform output
+
+# 6️⃣ 查看单个输出
+terraform output replica_count
+
+# 7️⃣ sensitive 值不会直接显示
+terraform output db_connection_string
+# 输出：╷
+#       │ Warning: Output refers to sensitive value
+#       │ (value is hidden unless you run with -json)
+
+# 想看也得加 -json：
+terraform output -json db_connection_string
+
+# 8️⃣ 查看数据源读到的内容
+terraform output config_file_content
+```
+
+---
+
+#### 🔄 试一下变量覆盖
+
+不修改文件，直接通过命令行覆盖变量：
+
+```bash
+# 用 prod 配置重新 apply
+terraform apply -var="environment=prod" -var="replicas=3"
+
+# 观察变化：
+#   - log_level 从 debug → warn
+#   - replica_count 从 2 → 6（翻倍）
+#   - 文件名从 staging → prod
+#   - 生成了新的 .conf 和 .json 文件
+
+# 查看生成的新文件
+cat terraform-day3-prod.conf
+```
+
+也可以用环境变量：
+
+```bash
+export TF_VAR_environment=prod
+terraform plan     # 此时用的是 prod
+unset TF_VAR_environment
+```
+
+---
+
+#### 🧹 清理
+
+```bash
+terraform destroy
+# 或直接删文件
+rm -f terraform-day3-*.conf terraform-day3-*.json
+```
+
+---
+
 ### ✅ Day 3 学习成果检查
 
 - [ ] 会定义和使用不同类型的变量
@@ -725,6 +1108,14 @@ aws dynamodb create-table \
 ```
 
 > 💡 S3 负责"存文件"，DynamoDB 负责"上锁"——两人同时 apply 时，只有一个人能拿到锁。
+
+> ⚠️ **State 文件安全警告**：`terraform.tfstate` 中**可能包含明文敏感信息**——数据库密码、IAM 密钥、私钥、连接字符串等。如果你用了 `sensitive = true` 标记输出，Terraform 会在日志中隐藏它，但 state 文件里仍然是明文。因此：
+> - ✅ 对 S3 后端**启用存储桶版本控制**（`aws s3api put-bucket-versioning`），意外删改 state 时可恢复
+> - ✅ 使用 **S3 桶策略限制访问**——只有需要的人能读 state
+> - ✅ 生产环境考虑用 **Terraform Cloud / Enterprise**，其 state 始终加密存储且支持审计
+> - ❌ 不要将 `terraform.tfstate` 提交到 Git
+> 
+> 后续 Day 8 会讲如何通过 Vault 等工具避免敏感信息进入 state。
 
 ### 4.4 状态操作命令
 
@@ -916,12 +1307,55 @@ module "vpc" {
 
 > 💡 Terraform Registry（registry.terraform.io）就像 Docker Hub——上面有官方和社区维护的各类模块。
 
+### 5.5 `lifecycle` 元参数——控制资源创建/销毁行为
+
+`lifecycle` 是你生产环境中**必须掌握**的元参数，用于控制 Terraform 在变更资源时的行为：
+
+```hcl
+resource "aws_instance" "web" {
+  ami           = "ami-xxx"
+  instance_type = "t3.micro"
+
+  lifecycle {
+    # ─── prevent_destroy：防止误删 ───
+    # 设置后，任何试图 destroy 这个资源的 plan 都会直接报错
+    # 适用于数据库、生产环境核心资源
+    prevent_destroy = true
+
+    # ─── create_before_destroy：先建后删 ───
+    # 资源更新时，先创建新的再删除旧的，实现零停机
+    # 适用于 ALB、安全组等需要不停机的资源
+    create_before_destroy = true
+
+    # ─── ignore_changes：忽略特定属性的变化 ───
+    # 资源创建后，某些属性如果被外部修改（如 AWS 控制台手动调整），
+    # Terraform 不会尝试改回来
+    ignore_changes = [
+      ami,              # AMI 版本可能被外部自动更新
+      user_data,        # 启动脚本可能被运维脚本修改
+      tags,             # 标签可能被其他工具管理
+    ]
+  }
+}
+```
+
+**三个 `lifecycle` 规则的典型用法：**
+
+| 规则 | 作用 | 典型场景 |
+|------|------|----------|
+| `prevent_destroy = true` | 阻止删除 | 生产数据库、有状态服务 |
+| `create_before_destroy = true` | 先新建后销毁（零停机更新） | 负载均衡器、安全组 |
+| `ignore_changes = [...]` | 忽略外部对某些属性的修改 | AMI 自动更新、外部标签管理 |
+
+> ⚠️ `prevent_destroy` 只能阻止 `terraform destroy` 和 `terraform apply` 中删除该资源的操作，但如果你手动改了代码中该资源的名称再 apply，Terraform 还是会试图删除旧资源创建新资源——这时 `create_before_destroy` 可以保护你不中断服务。
+
 ### ✅ Day 5 学习成果检查
 
 - [ ] 理解模块化的必要性和目录结构规范
 - [ ] 会创建自己的模块（source 用本地路径）
 - [ ] 会使用 `source` 引用本地和 Registry 上的模块
 - [ ] 理解模块的输入（variables）和输出（outputs）
+- [ ] 掌握了 `lifecycle` 的三个元参数（prevent_destroy / create_before_destroy / ignore_changes）的用法
 
 ---
 
@@ -947,7 +1381,7 @@ module "vpc" {
 
 ```hcl
 terraform {
-  required_version = ">= 1.0"
+  required_version = "~> 1.9"          # 建议用悲观约束：>= 1.9, < 2.0，防止大版本升级导致意外
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -1077,7 +1511,9 @@ resource "aws_route_table_association" "public" {
 # 5. 安全组（防火墙规则）
 # ────────────────────────────────────────────
 
-# Web 服务器安全组（开放 80 和 443）
+# Web 服务器安全组（开放 80 和 443，⚠️ 生产环境不应开放 SSH 22 端口到全互联网）
+# 生产环境最佳实践：EC2 放在私有子网，通过 ALB/NLB 暴露服务
+# SSH 管理应通过 AWS Systems Manager Session Manager 或 VPN + 堡垒机
 resource "aws_security_group" "web" {
   name        = "${var.project}-${var.env}-web-sg"
   description = "Allow HTTP/HTTPS"
@@ -1134,14 +1570,14 @@ resource "aws_security_group" "db" {
 # 6. EC2 实例（Web 服务器）
 # ────────────────────────────────────────────
 
-# 查找最新的 Amazon Linux 2 AMI
+# 查找最新的 Amazon Linux 2023 AMI（⚠️ Amazon Linux 2 已于 2025 年结束标准支持，新项目请用 AL2023）
 data "aws_ami" "amazon_linux" {
   most_recent = true
   owners      = ["amazon"]
 
   filter {
     name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+    values = ["al2023-ami-*-x86_64"]
   }
 }
 
@@ -1154,8 +1590,9 @@ resource "aws_instance" "web" {
 
   user_data = <<-EOF
     #!/bin/bash
-    yum update -y
-    yum install -y httpd
+    # Amazon Linux 2023 已用 dnf 替代 yum
+    dnf update -y
+    dnf install -y httpd
     systemctl start httpd
     systemctl enable httpd
     echo "<h1>Hello from Terraform!</h1>" > /var/www/html/index.html
@@ -1183,8 +1620,8 @@ resource "aws_db_instance" "main" {
   identifier = "${var.project}-${var.env}-mysql"
 
   engine         = "mysql"
-  engine_version = "8.0"
-  instance_class = "db.t3.micro"
+  engine_version = "8.0"             # ✅ 注意：AWS RDS 引擎版本会随时间更新，建议用 `aws rds describe-db-engine-versions` 查看最新可用版本
+  instance_class = "db.t4g.micro"    # ⚠️ RDS 没有 db.t3.micro！db.t4g.micro 是免费套餐可用的最小规格
 
   db_name  = "appdb"
   username = "admin"
@@ -1337,7 +1774,7 @@ mkdir -p ~/terraform-learning/eks-demo && cd $_
 
 ```hcl
 terraform {
-  required_version = ">= 1.0"
+  required_version = "~> 1.9"          # 建议用悲观约束：>= 1.9, < 2.0，防止大版本升级导致意外
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -1530,17 +1967,220 @@ environments/
     ├── main.tf
     ├── terraform.tfvars
     └── backend.tf        # S3 路径：prod/terraform.tfstate
+
+modules/                  # ← 各环境共享的模块
+└── app/
+    ├── main.tf           # EC2 + 安全组 + ALB
+    ├── variables.tf      # 输入参数
+    └── outputs.tf        # 输出值
 ```
 
-每个环境的 `main.tf` 共享同一个模块，但传递不同参数：
+每个环境的 `main.tf` 共享同一个 `modules/app` 模块，但传递不同参数。
+
+先来看这个共享模块的定义：
+
+创建 `~/terraform-learning/modules/app/variables.tf`：
+
+```hcl
+# modules/app/variables.tf
+# 定义这个模块需要外部传入哪些参数
+
+variable "env" {
+  description = "环境名称（dev / staging / prod），用于命名和标签隔离"
+  type        = string
+}
+
+variable "instance_type" {
+  description = "EC2 实例规格，不同环境可以用不同规格"
+  type        = string
+}
+
+variable "replicas" {
+  description = "EC2 实例数量，生产环境通常比开发环境多"
+  type        = number
+}
+
+variable "vpc_id" {
+  description = "目标 VPC ID，由调用方传入（引用 networking 模块的输出）"
+  type        = string
+}
+
+variable "public_subnet_ids" {
+  description = "公有子网 ID 列表，用于挂载 ALB 和 EC2"
+  type        = list(string)
+}
+```
+
+创建 `~/terraform-learning/modules/app/main.tf`：
+
+```hcl
+# modules/app/main.tf
+# 定义一个"应用"模块：安全组 + EC2 实例 + 负载均衡
+# 不同环境通过传递不同参数来复用这个模板
+
+# ────────────────────────────────────────────
+# 1. 安全组：允许 HTTP（80）入站
+# ────────────────────────────────────────────
+resource "aws_security_group" "web" {
+  name        = "${var.env}-web-sg"
+  description = "Allow HTTP inbound traffic"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description = "HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "Allow all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name        = "${var.env}-web-sg"
+    Environment = var.env
+  }
+}
+
+# ────────────────────────────────────────────
+# 2. 应用负载均衡（ALB）
+# ────────────────────────────────────────────
+resource "aws_lb" "app" {
+  name               = "${var.env}-app-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.web.id]
+  subnets            = var.public_subnet_ids
+
+  tags = {
+    Name        = "${var.env}-app-alb"
+    Environment = var.env
+  }
+}
+
+resource "aws_lb_target_group" "app" {
+  name     = "${var.env}-app-tg"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = var.vpc_id
+
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    interval            = 30
+    path                = "/"
+  }
+
+  tags = {
+    Name        = "${var.env}-app-tg"
+    Environment = var.env
+  }
+}
+
+resource "aws_lb_listener" "app" {
+  load_balancer_arn = aws_lb.app.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
+  }
+}
+
+# ────────────────────────────────────────────
+# 3. EC2 实例（数量由 replicas 控制）
+# ────────────────────────────────────────────
+resource "aws_instance" "web" {
+  # count 控制创建几台：dev 传 1 台，prod 传 5 台
+  count = var.replicas
+
+  ami           = data.aws_ami.amazon_linux.id
+  instance_type = var.instance_type
+
+  # 放到公有子网，并关联安全组
+  subnet_id              = var.public_subnet_ids[count.index % length(var.public_subnet_ids)]
+  vpc_security_group_ids = [aws_security_group.web.id]
+  associate_public_ip_address = true
+
+  # 启动时安装 HTTP 服务
+  user_data = <<-EOF
+    #!/bin/bash
+    dnf install -y httpd
+    systemctl start httpd
+    systemctl enable httpd
+    echo "Hello from ${var.env} environment (instance ${count.index + 1})" > /var/www/html/index.html
+  EOF
+
+  tags = {
+    Name        = "${var.env}-web-${count.index + 1}"
+    Environment = var.env
+  }
+}
+
+# 把 EC2 注册到目标组（ALB 才能把流量转发过来）
+resource "aws_lb_target_group_attachment" "web" {
+  count            = var.replicas
+  target_group_arn = aws_lb_target_group.app.arn
+  target_id        = aws_instance.web[count.index].id
+  port             = 80
+}
+
+# 获取最新的 Amazon Linux 2023 AMI（⚠️ Amazon Linux 2 已结束标准支持，请用 AL2023）
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+}
+```
+
+创建 `~/terraform-learning/modules/app/outputs.tf`：
+
+```hcl
+# modules/app/outputs.tf
+# 暴露给调用方使用的输出值
+
+output "alb_dns_name" {
+  description = "ALB 的 DNS 域名，访问这个域名就能到达应用"
+  value       = aws_lb.app.dns_name
+}
+
+output "instance_ids" {
+  description = "创建的 EC2 实例 ID 列表"
+  value       = aws_instance.web[*].id
+}
+
+output "security_group_id" {
+  description = "Web 安全组 ID"
+  value       = aws_security_group.web.id
+}
+```
+
+有了这个模块后，每个环境的核心 `main.tf` 就非常简洁了：
 
 ```hcl
 # environments/dev/main.tf
 module "app" {
   source        = "../../modules/app"
+
   env           = "dev"
   instance_type = "t3.micro"
   replicas      = 1
+
+  # 引用 networking 模块的输出作为输入
+  vpc_id             = module.networking.vpc_id
+  public_subnet_ids  = module.networking.subnet_ids
 }
 ```
 
@@ -1548,9 +2188,13 @@ module "app" {
 # environments/prod/main.tf
 module "app" {
   source        = "../../modules/app"
+
   env           = "prod"
   instance_type = "t3.large"
   replicas      = 5
+
+  vpc_id             = module.networking.vpc_id
+  public_subnet_ids  = module.networking.subnet_ids
 }
 ```
 
@@ -1632,7 +2276,34 @@ override.tf
 terraform.rc
 ```
 
-### 8.5 CI/CD 集成（GitOps 方式）
+### 8.5 跨环境共享：`terraform_remote_state` 数据源
+
+当你的项目拆分为多个独立的 Terraform 项目（如 `networking/`、`services/`）时，不同项目之间需要共享输出值。`terraform_remote_state` 数据源就是干这个的：
+
+```hcl
+# services/app/main.tf
+# 读取 networking 项目的 state 来获取 VPC ID 和子网 ID
+
+data "terraform_remote_state" "networking" {
+  backend = "s3"
+
+  config = {
+    bucket = "my-company-terraform-state"
+    key    = "networking/terraform.tfstate"   # 指向 networking 项目的 state
+    region = "ap-northeast-1"
+  }
+}
+
+# 使用另一个项目的输出
+resource "aws_instance" "web" {
+  subnet_id = data.terraform_remote_state.networking.outputs.public_subnet_ids[0]
+  #                                ↑ 路径：引用 networking 项目的 output
+}
+```
+
+> ⚠️ **安全注意事项**：使用 `terraform_remote_state` 意味着你可以读取另一个项目的 state 文件。确保 S3 桶的访问策略限制哪些人可以读取 state。
+
+### 8.6 CI/CD 集成（GitOps 方式）
 
 ```
 开发者 Push 代码到 Git
@@ -1650,7 +2321,9 @@ terraform plan         ← 在 PR 里审查 plan 输出
 terraform apply        ← 自动执行
 ```
 
-#### GitHub Actions 示例
+#### GitHub Actions 示例（安全版本）
+
+> ⚠️ **使用 OIDC 替代静态密钥**：下面示例假设通过 OIDC（OpenID Connect）进行 AWS 认证，而不是在 CI 中存储 AWS 密钥。这是当前的安全最佳实践——OIDC 让 CI 不需要保存任何长期有效的凭据。GitHub/AWS/GitLab 等都支持。
 
 ```yaml
 name: Terraform
@@ -1660,27 +2333,96 @@ on:
   pull_request:
     branches: [main]
 
+# OIDC 权限配置（替代静态 AWS 密钥）
+permissions:
+  id-token: write      # 允许请求 OIDC token
+  contents: read        # 允许读取仓库代码
+  pull-requests: write  # 允许 plan 输出作为 PR 评论
+
 jobs:
-  terraform:
+  # Job 1：Format + Validate（轻量级检查，在 plan 之前拦截低级错误）
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Format
+        run: terraform fmt -check -recursive
+        # -check：检查格式是否正确，不对则退出（不会自动修改）
+        # -recursive：递归检查所有子目录
+
+      - name: Terraform Validate
+        run: terraform validate
+        # ├── 建议配合 tflint（最佳实践检查）一起使用
+        # └── 建议配合 checkov / tfsec（安全扫描）一起使用
+
+  # Job 2：Plan（PR 触发，展示变更预览）
+  plan:
+    needs: [check]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/github-actions-terraform
+          aws-region: ap-northeast-1
 
       - name: Terraform Init
         run: terraform init
-        working-directory: environments/${{ github.ref_name }}
+        working-directory: environments/${{ github.head_ref || github.ref_name }}
 
       - name: Terraform Plan
-        run: terraform plan
-        working-directory: environments/${{ github.ref_name }}
+        run: terraform plan -no-color
+        working-directory: environments/${{ github.head_ref || github.ref_name }}
+
+      # 可选：将 plan 输出作为 PR 评论
+      - name: Post Plan to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.readFileSync('plan_output.txt', 'utf8');
+            // 这里可以将 plan 输出发布为 PR 评论
+
+  # Job 3：Apply（仅 main 分支，需要单独的人工审批步骤）
+  apply:
+    needs: [check]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Configure AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/github-actions-terraform
+          aws-region: ap-northeast-1
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: environments/main
 
       - name: Terraform Apply
-        if: github.ref == 'refs/heads/main'
         run: terraform apply -auto-approve
-        working-directory: environments/${{ github.ref_name }}
+        working-directory: environments/main
+        # ⚠️ -auto-approve 适合 CI/CD 自动化部署
+        #   生产环境建议先执行 plan 保存到文件
+        #   人工确认后再 apply plan.tfplan
 ```
+
+> 💡 **推荐检查工具组合**：
+> - **[tflint](https://github.com/terraform-linters/tflint)** — 检查 Terraform 代码风格和最佳实践
+> - **[checkov](https://www.checkov.io/)** — 基础设施安全扫描（合规、CIS 基线）
+> - **[infracost](https://www.infracost.io/)** — PR 中展示 Terraform 变更的成本预估，防止意外超支
+> - **[tfsec](https://github.com/aquasecurity/tfsec)** — 专门的安全扫描
+
+> 🔒 **关于 `.terraform.lock.hcl`**：Terraform 会自动生成这个锁文件来锁定 provider 的版本。**请把它提交到 Git 仓库**。这样团队所有成员和 CI 都使用同一版本的 provider，避免"在我的电脑上能跑"的问题。
 
 ### ✅ Day 8 学习成果检查
 
@@ -1688,6 +2430,8 @@ jobs:
 - [ ] 理解如何复用 Module 来管理不同环境
 - [ ] 知道如何处理敏感信息（环境变量 / Secrets Manager）
 - [ ] 了解 Terraform + CI/CD 的基本工作流
+- [ ] 会使用 `terraform_remote_state` 跨项目读取 state 输出
+- [ ] 了解 tflint / checkov / infracost 等辅助工具
 
 ---
 
@@ -1770,11 +2514,47 @@ terraform import <resource_type>.<name> <id>
 - ✅ 能用 Terraform 创建 EKS 集群（联动 K8s）
 - ✅ 理解多环境管理的最佳实践
 
-**下一步可以探索的方向：**
-- 🔄 **Terragrunt**：Terraform 的 DRY 工具，减少重复代码
-- 🔐 **Vault**：HashiCorp 的密钥管理工具（和 Terraform 同家）
-- 🏗️ **Pulumi**：用通用编程语言（TypeScript/Python/Go）写 IaC
-- 🚀 **Crossplane**：K8s 原生的 IaC 方案（直接在 K8s 里声明云资源）
+---
+
+## 🏁 Capstone 项目：从零搭建完整环境
+
+如果你已经完成以上 8 天的学习，现在尝试**独立完成这个总结项目**来检验所学：
+
+### 项目要求
+
+1. **目录结构**：设计 `modules/` + `environments/` 分离结构
+2. **网络模块**：`modules/networking/` — 创建 VPC + 公有/私有子网 + IGW + NAT 网关
+3. **计算模块**：`modules/compute/` — 创建 ALB + 安全组 + EC2（使用 `for_each` 管理多台）
+4. **数据库模块**：`modules/database/` — 创建 RDS（使用 `random_password` 生成密码）
+5. **多环境配置**：为 `dev / staging / prod` 各创建一套 `terraform.tfvars`
+6. **远程状态**：配置 S3 后端 + DynamoDB 锁表（提示：先手动创建 S3 桶和 DynamoDB 表）
+7. **资源保护**：给 RDS 实例添加 `lifecycle { prevent_destroy = true }`
+
+### 加分项
+
+- 使用 Git 管理代码，配置 `.gitignore`
+- 集成检查工具：运行 `terraform validate`、`tflint`、`checkov`
+- 使用 `terraform_remote_state` 数据源跨环境读取 VPC ID
+- 将配置部署到 CI/CD（GitHub Actions 或 GitLab CI）
+
+> 💡 遇到困难时回忆：`terraform plan` 预览变更，`terraform state list` 查看管理中的资源，`terraform validate` 检查语法。
+
+---
+
+**下一步可以探索的方向（推荐按此顺序学习）：**
+
+推荐的进阶学习顺序，从最贴近 Terraform 的工具开始，逐步向外扩展：
+
+1. 🔄 **[Terragrunt 入门指南](terraform-进阶-terragrunt.md)** —— **推荐第 1 步**
+   → 最贴近 Terraform，只解决代码重复问题，不引入新认知模型，学习成本最低
+2. 🔐 **[Vault 入门指南](terraform-进阶-vault.md)** —— **推荐第 2 步**
+   → HashiCorp 生态的核心组件，Terraform + Vault 集成是生产环境最佳实践
+3. 🏗️ **[Pulumi 入门指南](terraform-进阶-pulumi.md)]** —— **编程背景强，推荐第 3 步**
+   → 如果你觉得 HCL 的限制让你烦躁，用通用编程语言写 IaC
+4. 🚀 **[Crossplane 入门指南](terraform-进阶-crossplane.md)** —— **K8s 优先团队推荐第 3 步**
+   → 如果你已经在用 K8s，想把云资源也拉进来统一管理
+
+> Pulumi 和 Crossplane 是二选一的关系，取决于团队方向：编程背景强选 Pulumi，K8s 原生选 Crossplane。Terragrunt 和 Vault 则是通用补充——运维越多，越早学越好。
 
 ---
 
