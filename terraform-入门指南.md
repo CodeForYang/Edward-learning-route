@@ -2015,15 +2015,12 @@ prod/      → 5 台 t3.large，生产环境
 environments/
 ├── dev/
 │   ├── main.tf           # 调用 Module，传 dev 参数
-│   ├── terraform.tfvars  # dev 变量值
 │   └── backend.tf        # S3 路径：dev/terraform.tfstate
 ├── staging/
 │   ├── main.tf
-│   ├── terraform.tfvars
 │   └── backend.tf        # S3 路径：staging/terraform.tfstate
 └── prod/
     ├── main.tf
-    ├── terraform.tfvars
     └── backend.tf        # S3 路径：prod/terraform.tfstate
 
 modules/                  # ← 各环境共享的模块
@@ -2038,6 +2035,74 @@ modules/                  # ← 各环境共享的模块
 ```
 
 两个模块都在 `modules/` 目录下，各环境共享同一套模板。
+
+#### 📁 `modules/networking/` — 网络层模块
+
+这个模块在 [Day 5](#52-创建一个简单的模块) 中已经详细写过，此处按标准结构拆为三个文件：
+
+**`modules/networking/variables.tf`**：
+
+```hcl
+variable "vpc_cidr" {
+  description = "VPC 的 CIDR 地址段，如 10.0.0.0/16"
+  type        = string
+}
+
+variable "env" {
+  description = "环境名称（dev / staging / prod），用于资源命名和标签隔离"
+  type        = string
+}
+```
+
+**`modules/networking/main.tf`**：
+
+```hcl
+# 查询当前区域有哪些可用区
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+# 创建 VPC
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "${var.env}-vpc"
+    Env  = var.env
+  }
+}
+
+# 创建两个公有子网（分布在不同的可用区）
+resource "aws_subnet" "public" {
+  count             = 2
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index)
+  availability_zone = data.aws_availability_zones.available.names[count.index]
+
+  tags = {
+    Name = "${var.env}-public-${count.index}"
+    Env  = var.env
+  }
+}
+```
+
+**`modules/networking/outputs.tf`**：
+
+```hcl
+output "vpc_id" {
+  description = "VPC ID，供 app 模块引用"
+  value       = aws_vpc.main.id
+}
+
+output "subnet_ids" {
+  description = "公有子网 ID 列表，供 app 模块挂载 ALB 和 EC2"
+  value       = aws_subnet.public[*].id
+}
+```
+
+#### 📁 `modules/app/` — 应用层模块
 
 先来看这个共享模块的定义：
 
@@ -2238,7 +2303,7 @@ output "security_group_id" {
 }
 ```
 
-有了这个模块后，每个环境的核心 `main.tf` 就非常简洁了：
+有了这个模块后，每个环境的核心 `main.tf` 就非常简洁了——直接给模块传值：
 
 ```hcl
 # environments/dev/main.tf
@@ -2283,6 +2348,10 @@ module "app" {
   public_subnet_ids  = module.networking.subnet_ids
 }
 ```
+
+> 💡 两个环境的差异只在 `main.tf` 的传值上体现。`modules/app/variables.tf` 是唯一的接口定义，环境层不需要再重复声明变量。
+
+#### 📄 `backend.tf`（以 dev 为例，各环境路径不同）
 
 ```hcl
 # environments/dev/backend.tf
