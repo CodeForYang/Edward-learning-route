@@ -1108,27 +1108,33 @@ rm terraform.tfstate
 ```hcl
 terraform {
   backend "s3" {
-    bucket         = "my-terraform-state"           # S3 桶
+    bucket         = "my-terraform-state"           # S3 桶（需提前创建）
     key            = "prod/terraform.tfstate"       # 路径（区分环境）
     region         = "ap-northeast-1"               # 区域
     encrypt        = true                           # 加密
-    dynamodb_table = "terraform-state-lock"         # 锁定表（防并发）
+    use_lockfile   = true                           # 使用文件锁（替代已废弃的 dynamodb_table）
   }
 }
 ```
 
-**配套 DynamoDB 锁表**（先手动创建，或者用另一个 Terraform 项目创建）：
+> ⚠️ **先有鸡还是先有蛋？** S3 桶需要**提前手动创建**——Terraform 不能自己创建自己存 state 的桶。
+> 只需要初始化时做一次：
 
 ```bash
-aws dynamodb create-table \
-  --table-name terraform-state-lock \
-  --attribute-definitions AttributeName=LockID,AttributeType=S \
-  --key-schema AttributeName=LockID,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region ap-northeast-1
+# 在配置 backend.tf 之前，先手动创建 S3 桶（桶名需全局唯一）
+aws s3 mb s3://你的名字-terraform-state --region ap-northeast-1
+
+# 启用版本控制（防止误删/误改 state）
+aws s3api put-bucket-versioning \
+  --bucket 你的名字-terraform-state \
+  --versioning-configuration Status=Enabled
+
+# 然后在 backend.tf 里填上你的桶名
 ```
 
-> 💡 S3 负责"存文件"，DynamoDB 负责"上锁"——两人同时 apply 时，只有一个人能拿到锁。
+这步也叫 **bootstrap（引导初始化）**——整个项目中**只需要手动做一次**，之后 Terraform 的所有操作都自动读写这个桶。
+
+> 💡 S3 桶负责"存文件"，`use_lockfile = true` 负责"上锁"——多人同时 apply 时，只有一个人能操作，其他人会等锁释放。`dynamodb_table` 参数在 AWS provider v6 中已废弃，改为 `use_lockfile`。
 
 > ⚠️ **State 文件安全警告**：`terraform.tfstate` 中**可能包含明文敏感信息**——数据库密码、IAM 密钥、私钥、连接字符串等。如果你用了 `sensitive = true` 标记输出，Terraform 会在日志中隐藏它，但 state 文件里仍然是明文。因此：
 > - ✅ 对 S3 后端**启用存储桶版本控制**（`aws s3api put-bucket-versioning`），意外删改 state 时可恢复
@@ -2353,14 +2359,16 @@ module "app" {
 
 #### 📄 `backend.tf`（以 dev 为例，各环境路径不同）
 
+> ⚠️ 在写 `backend.tf` 之前，先手动创建好 S3 桶（参考 Day 4 的 bootstrap 说明），然后把 `bucket` 名字改成你创建的桶名。
+
 ```hcl
 # environments/dev/backend.tf
 terraform {
   backend "s3" {
-    bucket = "my-tfstate"
-    key    = "dev/terraform.tfstate"    # ← 不同的路径！
+    bucket = "你的名字-terraform-state"   # 改为你手动创建的桶名
+    key    = "dev/terraform.tfstate"     # ← 不同的路径！dev/staging/prod 各不同
     region = "ap-northeast-1"
-    dynamodb_table = "terraform-lock"
+    use_lockfile = true                  # 启用 state 锁定，防并发冲突
   }
 }
 ```
@@ -2400,26 +2408,42 @@ locals {
 
 #### 敏感信息处理
 
+**❌ 不要硬编码**——写在 `variables.tf` 的 `default` 里会提交到 Git：
+
 ```hcl
-# ❌ 不要硬编码——default 值会随 main.tf 提交到 Git，密码直接暴露
+# ❌ variables.tf —— 密码写在 default 里，会提交到 Git 暴露
 variable "db_password" {
-  default = "SuperSecret123!"    # ❌ 提交到 Git 了！
+  default = "SuperSecret123!"
 }
+```
 
-# ✅ 用环境变量传入——运行时设置，不进入版本控制
+**✅ 方式一：环境变量**——`variables.tf` 声明变量但不给 default，运行时通过终端传入：
+
+```hcl
+# ✅ variables.tf —— 只声明类型，不设 default
+variable "db_password" {
+  type      = string
+  sensitive = true    # 日志中隐藏值，但 state 文件仍存明文
+}
+```
+
+```bash
+# ✅ 终端 —— 运行时设置，不进入版本控制
 export TF_VAR_db_password=SuperSecret123!
-terraform apply                  # Terraform 自动读取 TF_VAR_ 前缀的环境变量
+terraform apply        # Terraform 自动读取 TF_VAR_ 前缀的环境变量
+```
 
-# ✅ 或使用 AWS Secrets Manager——安全存储 + 自动轮换
+**✅ 方式二：AWS Secrets Manager**——直接写在 `main.tf` 中，`variables.tf` 不再需要 `db_password` 变量：
+
+```hcl
+# ✅ main.tf —— 从 Secrets Manager 读取密码，避免任何位置明文存储
 data "aws_secretsmanager_secret_version" "db_password" {
   secret_id = "my-db-password"  # Secrets Manager 中的密钥名称
 }
 
 resource "aws_db_instance" "main" {
-  # 从 Secrets Manager 读取密码，避免任何位置明文存储
   password = data.aws_secretsmanager_secret_version.db_password.secret_string
 }
-```
 
 #### .gitignore
 
@@ -2684,7 +2708,7 @@ terraform import <resource_type>.<name> <id>
 3. **计算模块**：`modules/compute/` — 创建 ALB + 安全组 + EC2（使用 `for_each` 管理多台）
 4. **数据库模块**：`modules/database/` — 创建 RDS（使用 `random_password` 生成密码）
 5. **多环境配置**：为 `dev / staging / prod` 各创建一套 `terraform.tfvars`
-6. **远程状态**：配置 S3 后端 + DynamoDB 锁表（提示：先手动创建 S3 桶和 DynamoDB 表）
+6. **远程状态**：配置 S3 后端（提示：先手动创建 S3 桶，再配置 `backend.tf`，详见 Day 4）
 7. **资源保护**：给 RDS 实例添加 `lifecycle { prevent_destroy = true }`
 
 ### 加分项
