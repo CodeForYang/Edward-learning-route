@@ -146,19 +146,23 @@ mkdir -p ~/terraform-learning && cd ~/terraform-learning
 创建 `main.tf`：
 
 ```hcl
-# 指定 Provider（相当于告诉 Terraform 我要管哪个平台）
 terraform {
+  # required_providers 声明该项目需要哪些 provider 插件
   required_providers {
     local = {
+      # source 指定 provider 的来源路径：命名空间/类型
       source  = "hashicorp/local"
+      # version 用悲观约束 ~> 2.5，即 >= 2.5 且 < 3.0
       version = "~> 2.5"
     }
   }
 }
 
-# 创建一个本地文件
+# resource 块定义要创建的资源：类型是 local_file，名称是 hello
 resource "local_file" "hello" {
+  # content 指定文件的文本内容
   content  = "Hello Terraform!"
+  # filename 指定文件在本地磁盘的路径，path.module 表示当前模块目录
   filename = "${path.module}/hello.txt"
 }
 ```
@@ -457,44 +461,49 @@ locals {
 terraform {
   required_providers {
     random = {
+      # source 指定 provider 来源：hashicorp 官方维护的 random provider
       source  = "hashicorp/random"
+      # version 悲观约束 ~> 3.6，表示 >= 3.6 且 < 4.0
       version = "~> 3.6"
     }
   }
 }
 
-# 生成随机字符串
+# resource "random_string" 生成一个随机字符串，常用于创建唯一标识符
 resource "random_string" "suffix" {
-  length  = 6
-  special = false
-  upper   = false
+  length  = 6          # 生成长的随机字符串
+  special = false      # 不含特殊字符
+  upper   = false      # 只含小写字母
 }
 
-# 创建两个文件，文件名中引用随机值
+# resource "local_file" 创建一个配置文件，内容引用随机字符串和变量
 resource "local_file" "config" {
+  # content 使用 heredoc 语法（<<-EOF）编写多行文本
   content = <<-EOF
     server_name=web-${random_string.suffix.result}
     environment=${var.env}
     log_level=${local.log_level}
   EOF
+  # filename 也包含随机后缀，每次 apply 都会生成不同的文件名
   filename = "${path.module}/config-${random_string.suffix.result}.txt"
 }
 
-# 变量
+# variable 定义输入参数 env，调用方可以覆盖默认值
 variable "env" {
-  type    = string
-  default = "dev"
+  type    = string     # 类型为字符串
+  default = "dev"      # 默认值 dev，也可通过 tfvars / -var 覆盖
 }
 
-# 本地值
+# locals 定义本地计算值，仅在当前模块内可见
 locals {
+  # 条件表达式：如果是 prod 环境用 warn，否则用 debug
   log_level = var.env == "prod" ? "warn" : "debug"
 }
 
-# 输出
+# output 暴露执行结果给调用方
 output "created_file" {
-  value       = local_file.config.filename
-  description = "刚刚创建的文件路径"
+  value       = local_file.config.filename   # 输出生成的文件路径
+  description = "刚刚创建的文件路径"                # 可读说明
 }
 ```
 
@@ -546,15 +555,15 @@ variable "instance_type" {
 **变量的类型：**
 
 ```hcl
-variable "name"       { type = string }
-variable "count"      { type = number }
-variable "enabled"    { type = bool }
-variable "tags"       { type = map(string) }
-variable "azs"        { type = list(string) }
-variable "instance"   { type = object({
-                          size = string
-                          ami  = string
-                        }) }
+variable "name"       { type = string }       # 字符串类型
+variable "count"      { type = number }       # 数字类型
+variable "enabled"    { type = bool }         # 布尔类型（true / false）
+variable "tags"       { type = map(string) }  # 字典/映射类型（键=字符串，值=字符串）
+variable "azs"        { type = list(string) } # 字符串列表
+variable "instance"   { type = object({       # 对象类型（包含多个命名字段）
+                         size = string
+                         ami  = string
+                       }) }
 ```
 
 **给变量赋值的方式（优先级从低到高）：**
@@ -579,11 +588,14 @@ terraform apply -var="env=prod"
 就像函数的返回值，配置执行完后暴露一些有用的信息：
 
 ```hcl
-# 在 main.tf 中定义输出
+# output 块暴露 Terraform 执行后的结果给用户或其他模块使用
 output "instance_ip" {
+  # value 指定要暴露的属性值，这里引用 EC2 实例的公网 IP
   value       = aws_instance.web.public_ip
+  # description 提供可读说明，terraform output 时会显示
   description = "Web 服务器的公网 IP"
-  sensitive   = false    # 如果 true，会在日志中隐藏值
+  # sensitive 标记是否敏感：true 时日志中隐藏值，但 state 仍存明文
+  sensitive   = false
 }
 ```
 
@@ -598,29 +610,35 @@ terraform output instance_ip  # 只看这个
 数据源让你**读取**已在云平台上存在的资源信息，而不是创建新的：
 
 ```hcl
-# 查询当前 AWS 账号信息
+# data 块声明数据源：查询当前 AWS 账号信息，无需传参
 data "aws_caller_identity" "current" {}
 
-# 查询最新的 Ubuntu AMI
+# data 块查询最新 Ubuntu 24.04 AMI 镜像 ID
 data "aws_ami" "ubuntu" {
+  # most_recent = true 表示取符合条件的最新版本
   most_recent = true
+  # filter 按"名称"筛选：匹配 ubuntu 24.04 的 HVM SSD 镜像
   filter {
     name   = "name"
     values = ["ubuntu/images/hvm-ssd/ubuntu-24.04-*"]
   }
+  # filter 按虚拟化类型筛选：只取 HVM（硬件辅助虚拟化）
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
   }
-  owners = ["099720109477"]  # Canonical
+  # owners 指定 AMI 拥有者：099720109477 是 Canonical（Ubuntu 官方）的 AWS 账号
+  owners = ["099720109477"]
 }
 
-# 在资源中使用
+# resource 块使用数据源查询到的值创建资源
 resource "aws_instance" "web" {
-  ami           = data.aws_ami.ubuntu.id      # 引用数据源
+  # data.aws_ami.ubuntu.id 引用数据源返回的 AMI ID——不硬编码镜像 ID
+  ami           = data.aws_ami.ubuntu.id
   instance_type = "t3.micro"
 }
 
+# output 暴露数据源查询到的 AWS 账号 ID
 output "account_id" {
   value = data.aws_caller_identity.current.account_id
 }
@@ -635,23 +653,26 @@ output "account_id" {
 ### 3.4 本地值（Local）—— 变量计算的中间结果
 
 ```hcl
+# locals 块定义模块内部的本地计算值，不可从外部覆盖
 locals {
-  # 组合变量
+  # format 函数用于字符串模板拼接，等价于 "${var.project}-${var.env}"
   name = format("%s-%s", var.project, var.env)
   
-  # 根据环境计算不同的值
+  # 条件表达式（三目运算）：生产环境用 t3.large，否则用 t3.micro
   instance_type = var.env == "prod" ? "t3.large" : "t3.micro"
   replicas      = var.env == "prod" ? 3 : 1
   
-  # 合并标签
+  # merge 函数合并多个 map：将自定义标签 Name 添加到默认标签中
   tags = merge(var.default_tags, {
     Name = local.name
   })
 }
 
-# 使用 local
+# 在 resource 中引用 locals 的值
 resource "aws_instance" "web" {
+  # local.instance_type 引用上面定义的本地值
   instance_type = local.instance_type
+  # local.tags 引用合并后的完整标签集
   tags          = local.tags
 }
 ```
@@ -995,16 +1016,16 @@ Terraform 运行后，会创建一个 `terraform.tfstate` 文件。里面记录�
 
 ```json
 {
-  "resources": [
+  "resources": [                            # 所有被管理的资源列表
     {
-      "type": "aws_instance",
-      "name": "web",
-      "instances": [
+      "type": "aws_instance",               # 资源类型：EC2 实例
+      "name": "web",                        # 资源在代码中的命名（local name）
+      "instances": [                        # 该资源的实例列表（count/for_each 创建多个）
         {
-          "attributes": {
-            "id": "i-0a1b2c3d4e5f",
-            "ami": "ami-xxx",
-            "public_ip": "54.123.45.67"
+          "attributes": {                   # 资源的实际属性值，与云平台真实状态一致
+            "id": "i-0a1b2c3d4e5f",        # AWS 分配的唯一实例 ID
+            "ami": "ami-xxx",               # 创建时使用的 AMI 镜像 ID
+            "public_ip": "54.123.45.67"     # AWS 自动分配的公网 IP
           }
         }
       ]
@@ -1204,45 +1225,57 @@ environments/
 创建 `~/terraform-learning/modules/networking/main.tf`：
 
 ```hcl
+# variable 定义模块的输入参数：VPC 的 CIDR 地址段，调用方必须传入
 variable "vpc_cidr" {
   type = string
 }
 
+# variable 定义环境名称（如 dev/prod），用于资源命名和标签隔离
 variable "env" {
   type = string
 }
 
+# resource 创建 VPC（虚拟私有网络），这是网络层的基础
 resource "aws_vpc" "main" {
+  # cidr_block 指定 VPC 的 IP 地址范围，如 "10.0.0.0/16"
   cidr_block           = var.vpc_cidr
+  # enable_dns_support 启用 DNS 解析（默认就是 true，显式写出更清晰）
   enable_dns_support   = true
+  # enable_dns_hostnames 启用 DNS 主机名（为 EC2 分配 DNS 名称）
   enable_dns_hostnames = true
 
+  # tags 给资源打标签，便于在 AWS 控制台识别和成本分配
   tags = {
     Name = "${var.env}-vpc"
     Env  = var.env
   }
 }
 
+# resource 创建两个公有子网，用于放置需要公网访问的资源
 resource "aws_subnet" "public" {
-  count             = 2
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index)
-  availability_zone = data.aws_availability_zones.available.names[count.index]
+  count             = 2                                                     # 创建 2 个子网，分布在不同的可用区
+  vpc_id            = aws_vpc.main.id                                       # 关联到上面创建的 VPC
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index)             # cidrsubnet 自动划分 CIDR 段
+  availability_zone = data.aws_availability_zones.available.names[count.index]  # 轮询分配到各个可用区
 
+  # tags 用 count.index 区分不同子网
   tags = {
     Name = "${var.env}-public-${count.index}"
     Env  = var.env
   }
 }
 
+# data 块查询当前区域有哪些可用区（AZ），供子网创建时使用
 data "aws_availability_zones" "available" {
-  state = "available"
+  state = "available"       # 只查询状态为 available 的可用区
 }
 
+# output 暴露 VPC ID，供调用模块的一方使用
 output "vpc_id" {
   value = aws_vpc.main.id
 }
 
+# output 暴露所有公有子网的 ID 列表（[*] 是 splat 表达式，提取所有实例的 id 属性）
 output "subnet_ids" {
   value = aws_subnet.public[*].id
 }
@@ -1256,26 +1289,29 @@ output "subnet_ids" {
 terraform {
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
+      source  = "hashicorp/aws"   # module 本身不声明 provider，但调用方需要
       version = "~> 5.0"
     }
   }
 }
 
 provider "aws" {
-  region = "ap-northeast-1"
+  region = "ap-northeast-1"       # 模块内资源将创建在此区域
 }
 
-# 调用网络模块
+# module 块调用自定义模块：source 使用本地路径引用
 module "networking" {
+  # source 指向模块目录，支持本地路径或 Registry URL
   source   = "../../modules/networking"
+  # vpc_cidr 传给模块的 variable "vpc_cidr"
   vpc_cidr = "10.0.0.0/16"
+  # env 传给模块的 variable "env"
   env      = "dev"
 }
 
-# 使用模块的输出
+# output 引用模块的输出值，供调用方或其他模块使用
 output "created_vpc_id" {
-  value = module.networking.vpc_id
+  value = module.networking.vpc_id   # 模块的 output "vpc_id" 暴露的值
 }
 ```
 
@@ -1284,20 +1320,22 @@ output "created_vpc_id" {
 别人写好的模块，直接拿来用：
 
 ```hcl
-# 标准 VPC 模块（来自 Terraform Registry）
+# module 块引用 Terraform Registry 上的公共模块，开箱即用
 module "vpc" {
-  source = "terraform-aws-modules/vpc/aws"   # registry 上的模块路径
+  # source 格式：命名空间/模块名/提供商（terraform-aws-modules/vpc/aws）
+  source = "terraform-aws-modules/vpc/aws"
+  # version 指定模块版本，与 provider 一样用悲观约束
   version = "~> 5.0"
 
-  name = "my-vpc"
-  cidr = "10.0.0.0/16"
+  name = "my-vpc"               # VPC 名称标签
+  cidr = "10.0.0.0/16"          # VPC 的 CIDR 地址段
 
-  azs             = ["ap-northeast-1a", "ap-northeast-1c"]
-  private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
-  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
+  azs             = ["ap-northeast-1a", "ap-northeast-1c"]   # 使用的可用区列表
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]           # 私有子网 CIDR
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]       # 公有子网 CIDR
 
-  enable_nat_gateway = true
-  enable_vpn_gateway = false
+  enable_nat_gateway = true      # 自动创建 NAT 网关（私有子网访问公网用）
+  enable_vpn_gateway = false     # 不创建 VPN 网关
 
   tags = {
     Environment = "dev"
@@ -1430,9 +1468,9 @@ variable "db_password" {
 # 1. VPC（虚拟私有网络）
 # ────────────────────────────────────────────
 resource "aws_vpc" "main" {
-  cidr_block           = "10.0.0.0/16"
-  enable_dns_support   = true
-  enable_dns_hostnames = true
+  cidr_block           = "10.0.0.0/16"     # VPC 的 IP 地址段，最多 65536 个 IP
+  enable_dns_support   = true               # 启用 DNS 解析
+  enable_dns_hostnames = true               # 为 EC2 自动分配 DNS 名称
 
   tags = {
     Name = "${var.project}-${var.env}-vpc"
@@ -1442,19 +1480,20 @@ resource "aws_vpc" "main" {
 # ────────────────────────────────────────────
 # 2. 子网（2 个公有子网，2 个私有子网）
 # ────────────────────────────────────────────
+# 查询当前区域有哪些可用区
 data "aws_availability_zones" "available" {
-  state = "available"
+  state = "available"                        # 只取正常运行的可用区
 }
 
 # 公有子网（放 Web 服务器、负载均衡）
 resource "aws_subnet" "public" {
-  count = 2
+  count = 2                                  # 创建 2 个，分布在不同的可用区
 
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)
-  availability_zone = data.aws_availability_zones.available.names[count.index]
+  vpc_id            = aws_vpc.main.id        # 关联到上面创建的 VPC
+  cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index)  # 自动划分子网段
+  availability_zone = data.aws_availability_zones.available.names[count.index]  # 轮询分配可用区
 
-  map_public_ip_on_launch = true   # 自动分配公网 IP
+  map_public_ip_on_launch = true             # 在该子网创建的 EC2 自动分配公网 IP
 
   tags = {
     Name = "${var.project}-${var.env}-public-${count.index}"
@@ -1463,10 +1502,10 @@ resource "aws_subnet" "public" {
 
 # 私有子网（放数据库、内部服务）
 resource "aws_subnet" "private" {
-  count = 2
+  count = 2                                  # 创建 2 个私有子网
 
   vpc_id            = aws_vpc.main.id
-  cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index + 2)
+  cidr_block        = cidrsubnet(aws_vpc.main.cidr_block, 8, count.index + 2)  # 偏移 2 避免与公有子网 CIDR 冲突
   availability_zone = data.aws_availability_zones.available.names[count.index]
 
   tags = {
@@ -1478,7 +1517,7 @@ resource "aws_subnet" "private" {
 # 3. 互联网网关（让 VPC 能访问公网）
 # ────────────────────────────────────────────
 resource "aws_internet_gateway" "main" {
-  vpc_id = aws_vpc.main.id
+  vpc_id = aws_vpc.main.id                    # 挂载到 VPC，VPC 内的子网才能通过它访问公网
 
   tags = {
     Name = "${var.project}-${var.env}-igw"
@@ -1491,9 +1530,10 @@ resource "aws_internet_gateway" "main" {
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
+  # route 块定义路由规则：所有流量（0.0.0.0/0）走互联网网关
   route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.main.id
+    cidr_block = "0.0.0.0/0"                 # 目标网段：0.0.0.0/0 表示所有公网地址
+    gateway_id = aws_internet_gateway.main.id  # 下一跳：互联网网关
   }
 
   tags = {
@@ -1501,8 +1541,9 @@ resource "aws_route_table" "public" {
   }
 }
 
+# 将公有路由表关联到每个公有子网
 resource "aws_route_table_association" "public" {
-  count          = 2
+  count          = 2                          # 2 个公有子网各关联一次
   subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public.id
 }
@@ -1517,16 +1558,18 @@ resource "aws_route_table_association" "public" {
 resource "aws_security_group" "web" {
   name        = "${var.project}-${var.env}-web-sg"
   description = "Allow HTTP/HTTPS"
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = aws_vpc.main.id               # 安全组属于哪个 VPC
 
+  # ingress 块定义入站规则：允许来自任意 IP 的 HTTP 流量
   ingress {
     description = "HTTP"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["0.0.0.0/0"]              # 允许所有来源 IP
   }
 
+  # ingress 定义 HTTPS 入站规则
   ingress {
     description = "HTTPS"
     from_port   = 443
@@ -1535,10 +1578,11 @@ resource "aws_security_group" "web" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # egress 块定义出站规则：允许所有出站流量（-1 表示所有协议）
   egress {
     from_port   = 0
     to_port     = 0
-    protocol    = "-1"
+    protocol    = "-1"                        # -1 表示所有协议
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -1553,12 +1597,13 @@ resource "aws_security_group" "db" {
   description = "Allow DB access from web tier"
   vpc_id      = aws_vpc.main.id
 
+  # ingress 只允许 Web 安全组所在的资源访问 MySQL 端口
   ingress {
     description     = "MySQL"
     from_port       = 3306
     to_port         = 3306
     protocol        = "tcp"
-    security_groups = [aws_security_group.web.id]   # 只放行 Web 安全组的流量
+    security_groups = [aws_security_group.web.id]   # 通过安全组 ID 引用，而非开放给全网
   }
 
   tags = {
@@ -1572,30 +1617,32 @@ resource "aws_security_group" "db" {
 
 # 查找最新的 Amazon Linux 2023 AMI（⚠️ Amazon Linux 2 已于 2025 年结束标准支持，新项目请用 AL2023）
 data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
+  most_recent = true                             # 取最新版本
+  owners      = ["amazon"]                       # 限定 AWS 官方提供的 AMI
 
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-*-x86_64"]             # 通配匹配 AL2023 的 x86 架构镜像名
   }
 }
 
 resource "aws_instance" "web" {
+  # ami 引用数据源查询到的 AMI ID，不硬编码具体值
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t3.micro"
-  subnet_id              = aws_subnet.public[0].id
-  vpc_security_group_ids = [aws_security_group.web.id]
-  associate_public_ip_address = true
+  instance_type          = "t3.micro"            # 实例规格
+  subnet_id              = aws_subnet.public[0].id  # 放到第一个公有子网中
+  vpc_security_group_ids = [aws_security_group.web.id]  # 关联 Web 安全组
+  associate_public_ip_address = true             # 自动分配公网 IP
 
+  # user_data 是实例启动时执行的脚本（首次启动运行一次）
   user_data = <<-EOF
     #!/bin/bash
     # Amazon Linux 2023 已用 dnf 替代 yum
-    dnf update -y
-    dnf install -y httpd
-    systemctl start httpd
-    systemctl enable httpd
-    echo "<h1>Hello from Terraform!</h1>" > /var/www/html/index.html
+    dnf update -y                                # 更新系统包
+    dnf install -y httpd                         # 安装 Apache Web 服务器
+    systemctl start httpd                        # 启动 Apache 服务
+    systemctl enable httpd                       # 设置开机自启
+    echo "<h1>Hello from Terraform!</h1>" > /var/www/html/index.html  # 写入测试页面
   EOF
 
   tags = {
@@ -1607,9 +1654,10 @@ resource "aws_instance" "web" {
 # 7. RDS 数据库（MySQL）
 # ────────────────────────────────────────────
 
+# 数据库子网组：RDS 需要关联到至少两个私有子网实现高可用
 resource "aws_db_subnet_group" "main" {
   name       = "${var.project}-${var.env}-db-subnet-group"
-  subnet_ids = aws_subnet.private[*].id
+  subnet_ids = aws_subnet.private[*].id          # 引用上面创建的所有私有子网
 
   tags = {
     Name = "${var.project}-${var.env}-db-subnet-group"
@@ -1617,22 +1665,22 @@ resource "aws_db_subnet_group" "main" {
 }
 
 resource "aws_db_instance" "main" {
-  identifier = "${var.project}-${var.env}-mysql"
+  identifier = "${var.project}-${var.env}-mysql"  # RDS 实例标识符，在 AWS 控制台中显示
 
   engine         = "mysql"
-  engine_version = "8.0"             # ✅ 注意：AWS RDS 引擎版本会随时间更新，建议用 `aws rds describe-db-engine-versions` 查看最新可用版本
-  instance_class = "db.t4g.micro"    # ⚠️ RDS 没有 db.t3.micro！db.t4g.micro 是免费套餐可用的最小规格
+  engine_version = "8.0"                          # ⚠️ 引擎版本会随时间更新，apply 前用 aws cli 确认最新版
+  instance_class = "db.t4g.micro"                 # ⚠️ RDS 没有 db.t3.micro！db.t4g.micro 是最小免费规格
 
-  db_name  = "appdb"
-  username = "admin"
-  password = var.db_password
+  db_name  = "appdb"                              # 数据库名称（连接时用）
+  username = "admin"                              # 数据库管理员用户名
+  password = var.db_password                      # 密码从变量传入，避免硬编码
 
-  db_subnet_group_name   = aws_db_subnet_group.main.name
-  vpc_security_group_ids = [aws_security_group.db.id]
+  db_subnet_group_name   = aws_db_subnet_group.main.name   # 关联到上面定义的子网组
+  vpc_security_group_ids = [aws_security_group.db.id]      # 关联数据库安全组
 
-  skip_final_snapshot  = true       # 学习环境跳过快照
-  publicly_accessible  = false      # 不开放公网访问
-  allocated_storage    = 20
+  skip_final_snapshot  = true                     # 删除时跳过创建最终快照（学习环境避免残留）
+  publicly_accessible  = false                    # 不开放公网访问，仅 VPC 内部可连接
+  allocated_storage    = 20                       # 分配 20GB 存储空间
 
   tags = {
     Name = "${var.project}-${var.env}-mysql"
@@ -1643,22 +1691,26 @@ resource "aws_db_instance" "main" {
 创建 `outputs.tf`：
 
 ```hcl
+# 输出 VPC 的 ID，供其他 Terraform 项目或模块引用
 output "vpc_id" {
   description = "VPC ID"
   value       = aws_vpc.main.id
 }
 
+# 输出 Web 服务器的公网 IP，方便直接 SSH 或浏览器访问
 output "web_server_ip" {
   description = "Web 服务器公网 IP"
   value       = aws_instance.web.public_ip
 }
 
+# 输出数据库连接地址，供应用配置使用（标记 sensitive 防止日志泄露）
 output "db_endpoint" {
   description = "数据库连接地址"
   value       = aws_db_instance.main.endpoint
-  sensitive   = true
+  sensitive   = true                    # true 表示在控制台输出中隐藏具体值
 }
 
+# 输出可直接访问的 URL 链接（拼接 IP 生成）
 output "web_server_url" {
   value = "http://${aws_instance.web.public_ip}"
 }
@@ -1667,10 +1719,10 @@ output "web_server_url" {
 创建 `terraform.tfvars`：
 
 ```hcl
-region      = "ap-northeast-1"
-project     = "terraform-demo"
-env         = "dev"
-db_password = "SafePassword123!"    # ⚠️ 真实项目不要硬编码！
+region      = "ap-northeast-1"        # AWS 区域：东京
+project     = "terraform-demo"        # 项目名称，用于资源命名前缀
+env         = "dev"                   # 环境标识，用于资源隔离
+db_password = "SafePassword123!"      # ⚠️ 真实项目不要硬编码！应使用环境变量或 Secrets Manager
 ```
 
 ### 6.3 部署
@@ -1790,26 +1842,30 @@ provider "aws" {
 # ────────────────────────────────────────────
 # 1. VPC（EKS 需要 VPC 支持）
 # ────────────────────────────────────────────
+# 查询当前区域有哪些可用区，用于后续分配子网
 data "aws_availability_zones" "available" {}
 
+# 使用 Terraform Registry 上的 VPC 模块快速创建生产级网络
 module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
+  source  = "terraform-aws-modules/vpc/aws"    # Registry 路径
   version = "~> 5.0"
 
-  name = "eks-demo-vpc"
-  cidr = "10.0.0.0/16"
+  name = "eks-demo-vpc"                        # VPC 名称标签
+  cidr = "10.0.0.0/16"                         # VPC 地址段
 
-  azs             = slice(data.aws_availability_zones.available.names, 0, 2)
-  private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
-  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
+  azs             = slice(data.aws_availability_zones.available.names, 0, 2)   # 取前 2 个可用区
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]                            # 私有子网
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]                        # 公有子网
 
-  enable_nat_gateway   = true
-  enable_dns_hostnames = true
+  enable_nat_gateway   = true                  # 创建 NAT 网关（EKS 节点需要访问 ECR/ECR）
+  enable_dns_hostnames = true                  # 启用 DNS 主机名
 
+  # EKS 需要的标签：公有子网标记为 LoadBalancer 角色
   public_subnet_tags = {
     "kubernetes.io/role/elb" = "1"
   }
 
+  # EKS 需要的标签：私有子网标记为 Internal ELB 角色
   private_subnet_tags = {
     "kubernetes.io/role/internal-elb" = "1"
   }
@@ -1818,30 +1874,32 @@ module "vpc" {
 # ────────────────────────────────────────────
 # 2. EKS 集群
 # ────────────────────────────────────────────
+# 使用 Terraform Registry 上的 EKS 模块创建托管 K8s 集群
 module "eks" {
-  source  = "terraform-aws-modules/eks/aws"
+  source  = "terraform-aws-modules/eks/aws"    # Registry 路径
   version = "~> 20.0"
 
-  cluster_name    = "eks-demo-tokyo"
-  cluster_version = "1.30"
+  cluster_name    = "eks-demo-tokyo"            # 集群名称，后续 kubectl 连接用
+  cluster_version = "1.30"                      # K8s 版本
 
-  cluster_endpoint_public_access = true
+  cluster_endpoint_public_access = true          # 允许从公网访问 API Server
 
-  # 指定子网（控制平面使用）
+  # vpc_id 和 subnet_ids 引用上面 VPC 模块的输出
   vpc_id     = module.vpc.vpc_id
+  # EKS 控制平面部署在私有子网中
   subnet_ids = module.vpc.private_subnets
 
-  # 节点组
+  # eks_managed_node_groups 定义托管节点组
   eks_managed_node_groups = {
-    main = {
-      desired_size = 2
-      min_size     = 1
-      max_size     = 4
+    main = {                                     # 节点组名称
+      desired_size = 2                           # 期望节点数（初始运行 2 个）
+      min_size     = 1                           # 最小节点数（缩容不低于 1）
+      max_size     = 4                           # 最大节点数（扩容不超过 4）
 
-      instance_types = ["t3.medium"]
+      instance_types = ["t3.medium"]             # 节点实例规格
 
       tags = {
-        Role = "worker"
+        Role = "worker"                          # 标记为 Worker 节点
       }
     }
   }
@@ -1969,13 +2027,17 @@ environments/
     └── backend.tf        # S3 路径：prod/terraform.tfstate
 
 modules/                  # ← 各环境共享的模块
+├── networking/           # ← Day 5 创建的 VPC + 子网模块，此处复用
+│   ├── main.tf
+│   ├── variables.tf
+│   └── outputs.tf
 └── app/
     ├── main.tf           # EC2 + 安全组 + ALB
     ├── variables.tf      # 输入参数
     └── outputs.tf        # 输出值
 ```
 
-每个环境的 `main.tf` 共享同一个 `modules/app` 模块，但传递不同参数。
+两个模块都在 `modules/` 目录下，各环境共享同一套模板。
 
 先来看这个共享模块的定义：
 
@@ -2022,24 +2084,24 @@ variable "public_subnet_ids" {
 # 1. 安全组：允许 HTTP（80）入站
 # ────────────────────────────────────────────
 resource "aws_security_group" "web" {
-  name        = "${var.env}-web-sg"
+  name        = "${var.env}-web-sg"          # 安全组名称，按环境区分
   description = "Allow HTTP inbound traffic"
-  vpc_id      = var.vpc_id
+  vpc_id      = var.vpc_id                   # 模块输入：目标 VPC
 
   ingress {
-    description = "HTTP from anywhere"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTP from anywhere"       # 入站规则说明
+    from_port   = 80                         # 起始端口
+    to_port     = 80                         # 结束端口（80-80 即只开 80 端口）
+    protocol    = "tcp"                      # TCP 协议
+    cidr_blocks = ["0.0.0.0/0"]             # 允许所有来源 IP
   }
 
   egress {
-    description = "Allow all outbound"
-    from_port   = 0
+    description = "Allow all outbound"       # 出站规则说明
+    from_port   = 0                          # 0 表示所有端口
     to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    protocol    = "-1"                       # -1 表示所有协议
+    cidr_blocks = ["0.0.0.0/0"]             # 允许访问所有目标
   }
 
   tags = {
@@ -2052,11 +2114,11 @@ resource "aws_security_group" "web" {
 # 2. 应用负载均衡（ALB）
 # ────────────────────────────────────────────
 resource "aws_lb" "app" {
-  name               = "${var.env}-app-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.web.id]
-  subnets            = var.public_subnet_ids
+  name               = "${var.env}-app-alb"  # ALB 名称，按环境区分
+  internal           = false                 # false = 公网 ALB，可通过互联网访问
+  load_balancer_type = "application"         # 应用层负载均衡（HTTP/HTTPS）
+  security_groups    = [aws_security_group.web.id]  # 关联 Web 安全组
+  subnets            = var.public_subnet_ids         # 部署到公有子网
 
   tags = {
     Name        = "${var.env}-app-alb"
@@ -2065,17 +2127,18 @@ resource "aws_lb" "app" {
 }
 
 resource "aws_lb_target_group" "app" {
-  name     = "${var.env}-app-tg"
-  port     = 80
-  protocol = "HTTP"
-  vpc_id   = var.vpc_id
+  name     = "${var.env}-app-tg"             # 目标组名称
+  port     = 80                              # 后端服务端口（EC2 上 Apache 监听的端口）
+  protocol = "HTTP"                          # 健康检查和后端通信使用 HTTP
+  vpc_id   = var.vpc_id                      # 目标组所属 VPC
 
+  # health_check 定义 ALB 如何检测后端 EC2 的健康状态
   health_check {
-    enabled             = true
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-    interval            = 30
-    path                = "/"
+    enabled             = true               # 启用健康检查
+    healthy_threshold   = 2                  # 连续 2 次成功即视为健康
+    unhealthy_threshold = 2                  # 连续 2 次失败即视为不健康
+    interval            = 30                 # 每 30 秒检查一次
+    path                = "/"                # 检查根路径的 HTTP 响应
   }
 
   tags = {
@@ -2085,12 +2148,18 @@ resource "aws_lb_target_group" "app" {
 }
 
 resource "aws_lb_listener" "app" {
+  # 关联到之前创建的 ALB，指定接收流量的入口
   load_balancer_arn = aws_lb.app.arn
+  # 监听 80 端口，接收来自用户的 HTTP 请求
   port              = "80"
+  # 使用 HTTP 协议（若使用 HTTPS 需搭配 aws_lb_listener_certificate）
   protocol          = "HTTP"
 
+  # default_action 定义没有匹配任何规则时的默认行为
   default_action {
+    # 将所有流量转发到后端的目标组
     type             = "forward"
+    # 指定上一步创建的目标组，明确请求要发往哪组后端服务器
     target_group_arn = aws_lb_target_group.app.arn
   }
 }
@@ -2102,45 +2171,47 @@ resource "aws_instance" "web" {
   # count 控制创建几台：dev 传 1 台，prod 传 5 台
   count = var.replicas
 
-  ami           = data.aws_ami.amazon_linux.id
-  instance_type = var.instance_type
+  ami           = data.aws_ami.amazon_linux.id    # 引用数据源查询到的最新 AL2023 AMI ID
+  instance_type = var.instance_type                # 实例规格由调用方传入（dev=微型，prod=大型）
 
   # 放到公有子网，并关联安全组
   subnet_id              = var.public_subnet_ids[count.index % length(var.public_subnet_ids)]
+  # 关联 Web 安全组，开放 80 端口的入站流量
   vpc_security_group_ids = [aws_security_group.web.id]
+  # 自动分配公网 IP，用户可以直接通过浏览器访问 EC2 上的 Web 服务
   associate_public_ip_address = true
 
   # 启动时安装 HTTP 服务
   user_data = <<-EOF
     #!/bin/bash
-    dnf install -y httpd
-    systemctl start httpd
-    systemctl enable httpd
+    dnf install -y httpd                         # Amazon Linux 2023 用 dnf 替代 yum
+    systemctl start httpd                         # 启动 Apache 服务
+    systemctl enable httpd                        # 设置开机自启
     echo "Hello from ${var.env} environment (instance ${count.index + 1})" > /var/www/html/index.html
   EOF
 
   tags = {
-    Name        = "${var.env}-web-${count.index + 1}"
+    Name        = "${var.env}-web-${count.index + 1}"   # 例如 dev-web-1, dev-web-2
     Environment = var.env
   }
 }
 
 # 把 EC2 注册到目标组（ALB 才能把流量转发过来）
 resource "aws_lb_target_group_attachment" "web" {
-  count            = var.replicas
-  target_group_arn = aws_lb_target_group.app.arn
-  target_id        = aws_instance.web[count.index].id
-  port             = 80
+  count            = var.replicas                        # 每台 EC2 都注册一次
+  target_group_arn = aws_lb_target_group.app.arn         # 关联到上面创建的目标组
+  target_id        = aws_instance.web[count.index].id    # 当前 EC2 实例的 ID
+  port             = 80                                  # 目标端口 80（EC2 上 Apache 监听的端口）
 }
 
 # 获取最新的 Amazon Linux 2023 AMI（⚠️ Amazon Linux 2 已结束标准支持，请用 AL2023）
 data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
+  most_recent = true                                    # 取最新版本
+  owners      = ["amazon"]                              # 限定 AWS 官方提供的 AMI
 
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-*-x86_64"]                    # 匹配 AL2023 x86 架构的镜像名称
   }
 }
 ```
@@ -2171,6 +2242,15 @@ output "security_group_id" {
 
 ```hcl
 # environments/dev/main.tf
+
+# 先创建网络层（VPC + 子网）
+module "networking" {
+  source   = "../../modules/networking"
+  vpc_cidr = "10.0.0.0/16"
+  env      = "dev"
+}
+
+# 再创建应用层（安全组 + ALB + EC2），引用 networking 的输出
 module "app" {
   source        = "../../modules/app"
 
@@ -2178,7 +2258,6 @@ module "app" {
   instance_type = "t3.micro"
   replicas      = 1
 
-  # 引用 networking 模块的输出作为输入
   vpc_id             = module.networking.vpc_id
   public_subnet_ids  = module.networking.subnet_ids
 }
@@ -2186,6 +2265,13 @@ module "app" {
 
 ```hcl
 # environments/prod/main.tf
+
+module "networking" {
+  source   = "../../modules/networking"
+  vpc_cidr = "10.0.0.0/16"
+  env      = "prod"
+}
+
 module "app" {
   source        = "../../modules/app"
 
@@ -2228,13 +2314,14 @@ terraform workspace show
 在代码中获取当前 workspace：
 
 ```hcl
-# 根据 workspace 不同，实例类型不同
+# locals 根据当前 workspace 动态选择实例类型
 locals {
+  # 用 map 查找的方式：terraform.workspace 返回当前 workspace 名称
   instance_type = {
-    dev     = "t3.micro"
-    staging = "t3.small"
-    prod    = "t3.large"
-  }[terraform.workspace]
+    dev     = "t3.micro"      # 开发环境用最小规格
+    staging = "t3.small"      # 测试环境稍大
+    prod    = "t3.large"      # 生产环境用高性能规格
+  }[terraform.workspace]       # 用当前 workspace 名作为 key 查表取值
 }
 ```
 
@@ -2245,21 +2332,22 @@ locals {
 #### 敏感信息处理
 
 ```hcl
-# ❌ 不要硬编码
+# ❌ 不要硬编码——default 值会随 main.tf 提交到 Git，密码直接暴露
 variable "db_password" {
   default = "SuperSecret123!"    # ❌ 提交到 Git 了！
 }
 
-# ✅ 用环境变量传入
+# ✅ 用环境变量传入——运行时设置，不进入版本控制
 export TF_VAR_db_password=SuperSecret123!
-terraform apply
+terraform apply                  # Terraform 自动读取 TF_VAR_ 前缀的环境变量
 
-# ✅ 或使用 AWS Secrets Manager
+# ✅ 或使用 AWS Secrets Manager——安全存储 + 自动轮换
 data "aws_secretsmanager_secret_version" "db_password" {
-  secret_id = "my-db-password"
+  secret_id = "my-db-password"  # Secrets Manager 中的密钥名称
 }
 
 resource "aws_db_instance" "main" {
+  # 从 Secrets Manager 读取密码，避免任何位置明文存储
   password = data.aws_secretsmanager_secret_version.db_password.secret_string
 }
 ```
@@ -2281,23 +2369,23 @@ terraform.rc
 当你的项目拆分为多个独立的 Terraform 项目（如 `networking/`、`services/`）时，不同项目之间需要共享输出值。`terraform_remote_state` 数据源就是干这个的：
 
 ```hcl
-# services/app/main.tf
-# 读取 networking 项目的 state 来获取 VPC ID 和子网 ID
-
+# data "terraform_remote_state" 读取其他 Terraform 项目生成的 state 文件
+# 这样不同项目之间可以共享输出值，无需硬编码
 data "terraform_remote_state" "networking" {
-  backend = "s3"
+  backend = "s3"                              # 与目标项目相同的后端类型
 
   config = {
-    bucket = "my-company-terraform-state"
-    key    = "networking/terraform.tfstate"   # 指向 networking 项目的 state
-    region = "ap-northeast-1"
+    bucket = "my-company-terraform-state"     # 目标项目 state 所在的 S3 桶
+    key    = "networking/terraform.tfstate"   # 目标项目 state 的路径（不同环境不同 key）
+    region = "ap-northeast-1"                 # S3 桶所在区域
   }
 }
 
-# 使用另一个项目的输出
+# 使用另一个项目的输出：通过 outputs.xxx 访问目标项目的 output 块
 resource "aws_instance" "web" {
   subnet_id = data.terraform_remote_state.networking.outputs.public_subnet_ids[0]
-  #                                ↑ 路径：引用 networking 项目的 output
+  #           ↑                                   ↑
+  #           数据源引用                           networking 项目中定义的 output 名
 }
 ```
 
