@@ -1118,21 +1118,48 @@ terraform {
 ```
 
 > ⚠️ **先有鸡还是先有蛋？** S3 桶需要**提前手动创建**——Terraform 不能自己创建自己存 state 的桶。
-> 只需要初始化时做一次：
+> 这步叫 **bootstrap（引导初始化）**，整个项目只需要做一次。
+
+创建项目根目录下的 `bootstrap.sh`：
 
 ```bash
-# 在配置 backend.tf 之前，先手动创建 S3 桶（桶名需全局唯一）
-aws s3 mb s3://你的名字-terraform-state --region ap-northeast-1
+#!/bin/bash
+# bootstrap.sh —— 初始化 Terraform 远程 State 存储
+# 使用方法：bash bootstrap.sh <你的桶名> [区域]
+# 示例：    bash bootstrap.sh edward-tfstate ap-northeast-1
 
-# 启用版本控制（防止误删/误改 state）
+set -euo pipefail
+
+BUCKET="${1:?请传入 S3 桶名，如 edward-tfstate}"
+REGION="${2:-ap-northeast-1}"
+
+echo "=== 1/3 创建 S3 桶（桶名需全局唯一）==="
+aws s3 mb "s3://${BUCKET}" --region "$REGION"
+
+echo "=== 2/3 启用版本控制 ==="
 aws s3api put-bucket-versioning \
-  --bucket 你的名字-terraform-state \
+  --bucket "$BUCKET" \
   --versioning-configuration Status=Enabled
 
-# 然后在 backend.tf 里填上你的桶名
+echo "=== 3/3 启用服务端加密 ==="
+aws s3api put-bucket-encryption \
+  --bucket "$BUCKET" \
+  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+
+echo "✅ 完成！在 backend.tf 中写入："
+echo "─────────────────────────────"
+echo "  bucket = \"${BUCKET}\""
+echo "  region = \"${REGION}\""
+echo "  use_lockfile = true"
+echo "─────────────────────────────"
 ```
 
-这步也叫 **bootstrap（引导初始化）**——整个项目中**只需要手动做一次**，之后 Terraform 的所有操作都自动读写这个桶。
+```bash
+# 跑一次，终身使用
+bash bootstrap.sh edward-tfstate ap-northeast-1
+```
+
+然后在 `backend.tf` 里填上你的桶名。之后 Terraform 的所有 state 都会自动读写这个桶。
 
 > 💡 S3 桶负责"存文件"，`use_lockfile = true` 负责"上锁"——多人同时 apply 时，只有一个人能操作，其他人会等锁释放。`dynamodb_table` 参数在 AWS provider v6 中已废弃，改为 `use_lockfile`。
 
@@ -1269,6 +1296,41 @@ resource "aws_subnet" "public" {
     Name = "${var.env}-public-${count.index}"
     Env  = var.env
   }
+}
+
+# ⚠️ 关键依赖：ALB 必须挂载在带有互联网网关（IGW）的公有子网上。
+# 下面创建 IGW → 路由表 → 路由表关联，少了任意一环 ALB 都会创建失败。
+
+# 互联网网关——让 VPC 内的资源可以访问公网
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "${var.env}-igw"
+    Env  = var.env
+  }
+}
+
+# 公有路由表——定义子网内的流量路由规则
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"                 # 所有公网流量
+    gateway_id = aws_internet_gateway.main.id  # 下一跳到互联网网关
+  }
+
+  tags = {
+    Name = "${var.env}-public-rt"
+    Env  = var.env
+  }
+}
+
+# 路由表关联——把路由规则绑定到具体的子网上
+resource "aws_route_table_association" "public" {
+  count          = 2
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
 }
 
 # data 块查询当前区域有哪些可用区（AZ），供子网创建时使用
@@ -2092,6 +2154,41 @@ resource "aws_subnet" "public" {
     Env  = var.env
   }
 }
+
+# ⚠️ 互联网网关 + 路由表 + 路由表关联——缺少任意一环，后续 ALB 会创建失败
+# ALB 所在的子网必须有 IGW 和对应的路由规则才能正常工作
+
+# 互联网网关——VPC 访问公网的门户
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "${var.env}-igw"
+    Env  = var.env
+  }
+}
+
+# 公有路由表——所有公网流量走 IGW
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+
+  tags = {
+    Name = "${var.env}-public-rt"
+    Env  = var.env
+  }
+}
+
+# 将路由表关联到每个公有子网
+resource "aws_route_table_association" "public" {
+  count          = 2
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
 ```
 
 **`modules/networking/outputs.tf`**：
@@ -2372,6 +2469,20 @@ terraform {
   }
 }
 ```
+
+> ⚠️ **常见部署误区：** 修改代码后必须重新生成 `.tfplan`，不能沿用旧的。
+>
+> ```bash
+> # ✅ 代码改了，重新生成 plan 再 apply
+> terraform plan -out=dev-$(date +%Y%m%d).tfplan
+> terraform apply dev-20260706.tfplan
+> 
+> # ✅ 或者直接 terraform apply（现场算、现场执行）
+> terraform apply
+> 
+> # ❌ 错误：改了代码但用旧 plan
+> terraform apply 旧的.tfplan   # 旧 plan 不知道新代码，会失败
+> ```
 
 ### 8.3 方案二：Workspace（适合较简单的场景）
 
