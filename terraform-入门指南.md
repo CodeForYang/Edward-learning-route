@@ -24,7 +24,7 @@
 
 ## 学习路线总览
 
-```
+```text
 Day 1 ───── 什么是 IaC + 安装 Terraform + 跑通第一个例子
   │
 Day 2 ───── HCL 语法：resource、provider、数据类型、表达式
@@ -94,7 +94,7 @@ Terraform 文件后缀为 `.tf`，推荐安装 VSCode 的 **HashiCorp Terraform*
 
 **基础设施即代码（Infrastructure as Code）**——用代码来描述和管理你的云资源。
 
-```
+```text
 传统方式（手动）：
   登录 AWS 控制台 → 点"创建 EC2"→ 选镜像 → 配安全组 → 等创建
   → 另一同事也手动配 → 配置漂移 → "我记得上周不是这么配的啊？"
@@ -108,7 +108,7 @@ IaC 方式（Terraform）：
 
 如果你已经学过 K8s，这个对比能帮你快速理解：
 
-```
+```text
 K8s YAML：                    Terraform HCL：
 ────────                      ────────────
 apiVersion: apps/v1           terraform {
@@ -200,7 +200,7 @@ cat hello.txt
 
 ### 1.4 核心概念：Desired State 与 Current State
 
-```
+```text
 你写的内容（Desired State）：        Terraform 的运作：
 ┌────────────────────────┐          ┌────────────────────┐
 │ resource "local_file"  │  ──→     │ 读取 main.tf       │
@@ -228,7 +228,7 @@ terraform destroy
 ### 1.6 K8s vs Terraform 操作对比
 
 | 操作 | K8s 命令 | Terraform 命令 |
-|------|----------|---------------|
+| ------ | ---------- | --------------- |
 | 初始化 | — | `terraform init` |
 | 预览 | `kubectl apply --dry-run=client` | `terraform plan` |
 | 应用 | `kubectl apply -f` | `terraform apply` |
@@ -268,7 +268,7 @@ terraform validate
 
 ### 2.1 HCL vs YAML 对照
 
-```
+```text
 K8s YAML 语法：               Terraform HCL 语法：
 ─────────────                 ─────────────────
 apiVersion: v1               # 块（Block）用花括号
@@ -282,6 +282,7 @@ spec:                            key = "value"
 ```
 
 **关键区别：**
+
 - HCL 是配置语言（有逻辑、表达式、函数）
 - YAML 是数据序列化格式（纯数据结构）
 - HCL 支持 `for` 循环、`if` 条件、函数调用 —— **YAML 不行**
@@ -345,7 +346,7 @@ resource "aws_eip" "web_ip" {
 **引用语法：**
 
 | 表达式 | 含义 |
-|--------|------|
+| -------- | ------ |
 | `aws_instance.web.id` | 资源的属性 |
 | `data.aws_ami.ubuntu.id` | 数据源的属性 |
 | `var.instance_type` | 变量的值 |
@@ -421,7 +422,7 @@ resource "aws_subnet" "by_for_each" {
 **为什么这个区别很重要？**
 
 | 场景 | 用 `count` | 用 `for_each` |
-|------|-----------|--------------|
+| ------ | ----------- | -------------- |
 | 列表中间插了一个元素 | 所有后续资源的 `count.index` 变化 → 会触发更新/重建 ❌ | 键不变 → 不受影响 ✅ |
 | 删除列表中某个元素 | 需要手动 `terraform state rm` 移除旧的 | 自动移除对应的键 |
 | 从代码中引用某个资源 | `aws_subnet.by_count[1]`（下标脆弱） | `aws_subnet.by_for_each["subnet-b"]`（键稳定） |
@@ -645,6 +646,7 @@ output "account_id" {
 ```
 
 > 💡 **数据源 vs 资源：**
+>
 > - `resource` = **创建**新资源
 > - `data` = **读取**已有资源
 >
@@ -678,6 +680,7 @@ resource "aws_instance" "web" {
 ```
 
 > `locals` 和 `var` 的区别：
+>
 > - `var` = 外部输入的参数（用户赋值）
 > - `local` = 内部计算的中间值（由其他变量计算得来）
 
@@ -689,7 +692,7 @@ resource "aws_instance" "web" {
 
 #### 📁 文件结构
 
-```
+```text
 ~/terraform-learning/
 ├── day3-demo.tf          # 主配置（复制下面的完整代码）
 ├── terraform.tfvars      # 变量值文件
@@ -1036,7 +1039,7 @@ Terraform 运行后，会创建一个 `terraform.tfstate` 文件。里面记录�
 
 **Terraform 的工作循环：**
 
-```
+```text
   main.tf（你写的 Desired State）
      │
      ▼
@@ -1092,7 +1095,7 @@ rm terraform.tfstate
 
 本地 `terraform.tfstate` 只适合一个人玩玩。团队协作必须用远程存储：
 
-```
+```text
                     ┌────────────┐
                     │  S3 Bucket  │ ← 存 tfstate 文件
                     │  (中央存储) │
@@ -1119,13 +1122,15 @@ terraform {
 
 > ⚠️ **先有鸡还是先有蛋？** S3 桶需要**提前手动创建**——Terraform 不能自己创建自己存 state 的桶。
 > 这步叫 **bootstrap（引导初始化）**，整个项目只需要做一次。
+>
+> 💡 **版本约束的说明：** 上面的 `backend.tf` 只写了 `backend` 块，实际项目中你还需要在同一个 `terraform {}` 块里加上 `required_version` 和 `required_providers` 声明。之所以这里没写，是因为 Day 4 还未介绍 Provider 的概念——**Day 6 会专门讲解**，Day 6 之后的完整示例都会包含它们。
 
 创建项目根目录下的 `bootstrap.sh`：
 
 ```bash
 #!/bin/bash
 # bootstrap.sh —— 初始化 Terraform 远程 State 存储
-# 使用方法：bash bootstrap.sh <你的桶名> [区域]
+# 使用方法：bash bootstrap.sh <你的桶名> [区域]月亮舌头baby的可爱everythingtellme
 # 示例：    bash bootstrap.sh edward-tfstate ap-northeast-1
 
 set -euo pipefail
@@ -1164,11 +1169,12 @@ bash bootstrap.sh edward-tfstate ap-northeast-1
 > 💡 S3 桶负责"存文件"，`use_lockfile = true` 负责"上锁"——多人同时 apply 时，只有一个人能操作，其他人会等锁释放。`dynamodb_table` 参数在 AWS provider v6 中已废弃，改为 `use_lockfile`。
 
 > ⚠️ **State 文件安全警告**：`terraform.tfstate` 中**可能包含明文敏感信息**——数据库密码、IAM 密钥、私钥、连接字符串等。如果你用了 `sensitive = true` 标记输出，Terraform 会在日志中隐藏它，但 state 文件里仍然是明文。因此：
+>
 > - ✅ 对 S3 后端**启用存储桶版本控制**（`aws s3api put-bucket-versioning`），意外删改 state 时可恢复
 > - ✅ 使用 **S3 桶策略限制访问**——只有需要的人能读 state
 > - ✅ 生产环境考虑用 **Terraform Cloud / Enterprise**，其 state 始终加密存储且支持审计
 > - ❌ 不要将 `terraform.tfstate` 提交到 Git
-> 
+>
 > 后续 Day 8 会讲如何通过 Vault 等工具避免敏感信息进入 state。
 
 ### 4.4 状态操作命令
@@ -1220,7 +1226,7 @@ terraform init -reconfigure
 
 ### 5.1 为什么需要模块？
 
-```
+```text
 单文件（❌ 不推荐用于真实项目）：
 
 main.tf                     ← 一坨，500 行
@@ -1229,7 +1235,7 @@ terraform.tfvars            ← 变量值
 outputs.tf                  ← 输出
 ```
 
-```
+```text
 模块化（✅ 推荐）：
 
 modules/
@@ -1448,7 +1454,7 @@ resource "aws_instance" "web" {
 **三个 `lifecycle` 规则的典型用法：**
 
 | 规则 | 作用 | 典型场景 |
-|------|------|----------|
+| ------ | ------ | ---------- |
 | `prevent_destroy = true` | 阻止删除 | 生产数据库、有状态服务 |
 | `create_before_destroy = true` | 先新建后销毁（零停机更新） | 负载均衡器、安全组 |
 | `ignore_changes = [...]` | 忽略外部对某些属性的修改 | AMI 自动更新、外部标签管理 |
@@ -1472,7 +1478,7 @@ resource "aws_instance" "web" {
 
 ### 6.1 项目结构
 
-```
+```text
 ~/terraform-learning/real-demo/
 ├── main.tf              # 主配置
 ├── variables.tf          # 变量定义
@@ -1823,7 +1829,7 @@ terraform output
 
 当你执行 `terraform apply` 时，Terraform 自动推导出的依赖关系是这样的：
 
-```
+```text
 aws_vpc.main
   ├── aws_subnet.public[*]      ← 需要 VPC
   ├── aws_subnet.private[*]     ← 需要 VPC
@@ -1871,7 +1877,7 @@ aws ec2 describe-instances --region ap-northeast-1 --filters "Name=tag:Name,Valu
 
 ### 7.1 为什么要用 Terraform 创建 EKS 而非 eksctl？
 
-```
+```text
 eksctl:                     Terraform:
 ────────                    ─────────
 ✅ 简单快速                   ✅ 可以管理 EKS 之外的资源（VPC/RDS/等）
@@ -2031,7 +2037,7 @@ kubectl get pods
 
 对照你 K8s 入门指南中的 Bonus 部分：
 
-```
+```text
 eksctl 创建集群：
   eksctl create cluster --name my-k8s-tokyo ...
   一行命令 → 自动创建 VPC + EKS + 节点组
@@ -2073,13 +2079,14 @@ prod/      → 5 台 t3.large，生产环境
 ```
 
 核心问题：
+
 - **代码如何复用？** 不想把同样配置写三遍
 - **变量如何隔离？** 每个环境有不同的值
 - **State 如何隔离？** dev 的变更不能影响 prod
 
 ### 8.2 方案一：目录结构分离（推荐）
 
-```
+```text
 environments/
 ├── dev/
 │   ├── main.tf           # 调用 Module，传 dev 参数
@@ -2461,6 +2468,17 @@ module "app" {
 ```hcl
 # environments/dev/backend.tf
 terraform {
+  # ⚙️ 版本约束：确保团队和 CI 使用兼容的 Terraform 版本
+  required_version = "~> 1.9"
+
+  # 📦 Provider 声明：告诉 Terraform 去哪里下载什么 provider，锁定版本范围
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"               # 悲观约束：≥ 5.0, < 6.0，避免大版本升级
+    }
+  }
+
   backend "s3" {
     bucket = "你的名字-terraform-state"   # 改为你手动创建的桶名
     key    = "dev/terraform.tfstate"     # ← 不同的路径！dev/staging/prod 各不同
@@ -2469,6 +2487,8 @@ terraform {
   }
 }
 ```
+
+> 💡 **为什么不把 `required_version` / `required_providers` 放在 `main.tf`？** 因为它们和 `backend` 同属 `terraform {}` 块，放在同一个文件里语义上更紧凑。你也可以拆成独立的 `versions.tf` 文件，两者皆可——Terraform 会合并同一个 `terraform {}` 块的所有声明。关键是**不能缺**，否则要么 `terraform init` 会报警告，要么其他人或 CI 用不同版本跑时会出问题。
 
 > ⚠️ **常见部署误区：** 修改代码后必须重新生成 `.tfplan`，不能沿用旧的。
 >
@@ -2556,6 +2576,8 @@ resource "aws_db_instance" "main" {
   password = data.aws_secretsmanager_secret_version.db_password.secret_string
 }
 
+```
+
 #### .gitignore
 
 ```gitignore
@@ -2597,7 +2619,7 @@ resource "aws_instance" "web" {
 
 ### 8.6 CI/CD 集成（GitOps 方式）
 
-```
+```text
 开发者 Push 代码到 Git
         │
         ▼
@@ -2615,7 +2637,7 @@ terraform apply        ← 自动执行
 
 #### GitHub Actions 示例（安全版本）
 
-> ⚠️ **使用 OIDC 替代静态密钥**：下面示例假设通过 OIDC（OpenID Connect）进行 AWS 认证，而不是在 CI 中存储 AWS 密钥。这是当前的安全最佳实践——OIDC 让 CI 不需要保存任何长期有效的凭据。GitHub/AWS/GitLab 等都支持。
+⚠️ **使用 OIDC 替代静态密钥**：下面示例假设通过 OIDC（OpenID Connect）进行 AWS 认证，而不是在 CI 中存储 AWS 密钥。这是当前的安全最佳实践——OIDC 让 CI 不需要保存任何长期有效的凭据。GitHub/AWS/GitLab 等都支持。
 
 ```yaml
 name: Terraform
@@ -2709,6 +2731,7 @@ jobs:
 ```
 
 > 💡 **推荐检查工具组合**：
+>
 > - **[tflint](https://github.com/terraform-linters/tflint)** — 检查 Terraform 代码风格和最佳实践
 > - **[checkov](https://www.checkov.io/)** — 基础设施安全扫描（合规、CIS 基线）
 > - **[infracost](https://www.infracost.io/)** — PR 中展示 Terraform 变更的成本预估，防止意外超支
@@ -2765,7 +2788,7 @@ terraform graph                          # 输出依赖图（可使用 graphviz 
 ### 核心概念速查表
 
 | 概念 | 一句话 | 语法示例 |
-|------|--------|---------|
+| ------ | -------- | --------- |
 | **Provider** | 告诉 Terraform 管哪个平台 | `aws = { source = "hashicorp/aws" }` |
 | **Resource** | 要创建的具体资源 | `resource "aws_instance" "web" {}` |
 | **Data Source** | 查询已有资源 | `data "aws_ami" "ubuntu" {}` |
@@ -2851,3 +2874,352 @@ terraform import <resource_type>.<name> <id>
 ---
 
 > **遇到问题先查：** `terraform plan` 可以看到变更预览；`terraform state list` 看当前管的资源；`terraform validate` 检查语法；这三个解决 80% 的疑惑。
+
+---
+
+## 🏋️ 综合练习题：多环境配置管家系统
+
+> 📍 所有代码写完后统一放到 `/Users/yangpei/Desktop/k8s/terraform-learning/practice/` 目录下
+> 🎯 目标：检验你对**模块化、变量校验、count/for_each 差异化使用、lifecycle、数据源、远程后端、多环境配置**的掌握
+
+### 项目背景
+
+你需要为公司搭建一套"配置管家"系统，`config-service` 模块为每个环境（dev/staging/prod）生成不同风格的配置文件。整个项目必须满足生产级规范。
+
+---
+
+### 📁 1. 项目目录结构
+
+```text
+practice/
+├── modules/
+│   └── config-service/          ← 你写的可复用模块
+│       ├── main.tf
+│       ├── variables.tf
+│       └── outputs.tf
+├── environments/
+│   ├── dev/
+│   │   ├── main.tf              ← 调用 config-service 模块
+│   │   ├── backend.tf           ← S3 远程后端配置
+│   │   └── terraform.tfvars     ← dev 的变量值
+│   ├── staging/
+│   │   ├── main.tf
+│   │   ├── backend.tf
+│   │   └── terraform.tfvars
+│   └── prod/
+│       ├── main.tf
+│       ├── backend.tf
+│       └── terraform.tfvars
+├── bootstrap.sh                 ← 创建 S3 state 桶的脚本
+└── .gitignore                   ← 排除 .terraform/ *.tfstate 等
+```
+
+---
+
+### 🧩 2. config-service 模块需求
+
+这个模块用 `local_file` + `random` provider 生成配置文件（不花钱，同时检验你对 provider 的掌握）。
+
+#### 2.1 `variables.tf` —— 变量定义
+
+定义以下变量（注意类型约束、校验、默认值策略）：
+
+| 变量名 | 类型 | 必须/可选 | 要求 |
+| ----------- | -------- | -------------- | -------- |
+| `environment` | `string` | **必须** (无 default) | ⚠️ 校验：只允许 `dev`/`staging`/`prod`，否则报错 |
+| `project_name` | `string` | 可选 | 默认 `"config-service"` |
+| `replicas` | `number` | 可选 | 默认 `1`，校验：必须在 1~10 之间 |
+| `enable_backup` | `bool` | 可选 | 默认 `true` |
+| `feature_flags` | `list(string)` | 可选 | 默认 `["logging", "monitoring"]` |
+| `app_config` | `map(string)` | **必须** (无 default) | 环境特定的配置键值对（如 region / log_level / endpoint） |
+| `tags` | `map(string)` | 可选 | 默认 `{ Owner = "platform-team" }` |
+| `instance_config` | `object({size=string, disk=number})` | 可选 | 默认 `{ size = "t3.micro", disk = 20 }` |
+
+#### 易错点提醒
+
+- `environment` 没有 default —— 调用方必须显式传值，否则 Terraform 会在 apply 时交互式提示输入
+- `feature_flags` 的默认值是**静态列表**，后续要注意它和 `for_each` 的配合
+
+#### 2.2 `main.tf` —— 核心逻辑
+
+需要实现以下内容：
+
+##### a) Provider 声明
+
+```hcl
+terraform {
+  required_providers {
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.5"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+```
+
+##### b) Locals 计算
+
+计算以下本地值：
+
+| 本地值名 | 计算逻辑 |
+| --------- | --------- |
+| `full_name` | `project_name-environment` 格式拼接 |
+| `log_level` | 三目运算：prod → `"warn"`，staging → `"info"`，其他 → `"debug"` |
+| `effective_replicas` | prod 环境 replicas × 2，其他环境不变 |
+| `all_tags` | 合并传入的 tags + `{Name, Environment, Backup}` 三个标签 |
+| `upper_flags` | 用 `for` 表达式将 `feature_flags` 转为大写 |
+
+##### c) Random 资源
+
+- `random_string` 后缀资源：length 8，不含特殊字符，仅小写字母
+
+##### d) 主配置文件 —— 用 `for_each` 批量创建
+
+对 `var.app_config` 的每个 key 用 `for_each` 创建一个 `local_file`：
+
+- 文件名：`${local.full_name}-${each.key}.conf`
+- 内容：项目名、环境、该配置 key 的值、replicas、backup 状态、suffix
+- 每个 key 生成一个独立的文件
+
+> 💡 **易错点**：`for_each` 要求 map 或 set(string) 类型。如果尝试对 list 使用 `for_each`，Terraform 会报错，需要 `toset()` 转换。
+
+##### e) 汇总文件 —— 用 `count` 创建
+
+- 创建一个汇总 json 文件：`${local.full_name}-summary.json`
+- 内容包含所有配置信息 + feature_flags + tags
+- 用 `count = 1` 控制
+
+> 💡 **易错点**：`count` 和 `for_each` 的核心区别 —— count 用数字索引，中间插入/删除元素会导致后续资源被重建；for_each 用 key 管理，增删不影响其他资源。
+
+##### f) Lifecycle 规则
+
+在汇总文件资源上设置：
+
+- `create_before_destroy = true`
+- 忽略 `content` 属性的外部变更
+
+##### g) 数据源
+
+- 使用 `data.local_file` 读取主配置文件中的**第一个**（通过 `keys()` 函数动态取第一个 key）
+- 思考：如果用硬编码 `[0]` 索引取 `for_each` 创建的文件会有什么问题？
+
+> ⚠️ 数据源是在 `terraform plan` 阶段读取的，所以必须先 apply 创建文件后，数据源才能读到内容。这意味着**第一次 apply 可能报错**，需要 apply 两次 —— 这是 `data` 和 `resource` 在生命周期上的本质差异。
+
+#### 2.3 `outputs.tf` —— 暴露结果
+
+| 输出名 | 内容 | 特殊要求 |
+| -------- | ------ | --------- |
+| `config_files` | 生成的 config 文件路径列表 (map) | 用 `values()` 提取 |
+| `summary_file` | 汇总文件路径 | - |
+| `sample_config_content` | 数据源读取到的配置文件内容 | - |
+| `connection_string` | 模拟的数据库连接串 | **sensitive = true**，内容拼接 random 后缀 |
+| `all_tags` | 最终合并后的完整标签 | - |
+
+---
+
+### 🌍 3. 多环境配置
+
+每个环境调用同一个 `config-service` 模块，但传入不同参数。
+
+#### dev 环境
+
+**`environments/dev/main.tf`**：
+
+```hcl
+terraform {
+  required_providers {
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.5"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+  }
+}
+
+module "config" {
+  source = "../../modules/config-service"
+
+  environment   = "dev"
+  project_name  = "config-service"
+  replicas      = 1
+  app_config = {
+    region    = "ap-northeast-1"
+    log_level = "debug"
+    endpoint  = "http://localhost:8080"
+  }
+  feature_flags = ["logging", "debug_mode"]
+  tags = {
+    Owner = "dev-team"
+    Env   = "dev"
+  }
+}
+
+output "all_outputs" {
+  value = module.config
+}
+```
+
+**`environments/dev/backend.tf`**：
+
+```hcl
+terraform {
+  required_version = "~> 1.9"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+
+  backend "s3" {
+    bucket       = "<你的名字>-tfstate"    # 改为你 bootstrap 创建的桶名
+    key          = "dev/terraform.tfstate" # ← 不同环境用不同路径！
+    region       = "ap-northeast-1"
+    encrypt      = true
+    use_lockfile = true
+  }
+}
+```
+
+**`environments/dev/terraform.tfvars`**（可选，如果你用 main.tf 直接传值可以省略，示例供参考）：
+
+```hcl
+environment   = "dev"
+replicas      = 1
+app_config = {
+  region    = "ap-northeast-1"
+  log_level = "debug"
+  endpoint  = "http://localhost:8080"
+}
+feature_flags = ["logging", "debug_mode"]
+```
+
+#### staging 环境
+
+**`environments/staging/main.tf`**：
+
+- 使用相同的 module source
+- `environment = "staging"`，`replicas = 2`
+- `app_config` 增加 `cache_ttl = "300"` 配置项
+- `feature_flags = ["logging", "monitoring", "cache"]`
+
+**`environments/staging/backend.tf`**：
+
+- 与 dev 的区别只在 `key = "staging/terraform.tfstate"`
+
+#### prod 环境
+
+**`environments/prod/main.tf`**：
+
+- `environment = "prod"`，`replicas = 3`
+- `app_config` 增加 `auth_method = "iam"` 配置项
+- `feature_flags = ["logging", "monitoring", "cache", "audit"]`
+
+**`environments/prod/backend.tf`**：
+
+- `key = "prod/terraform.tfstate"`
+
+> ⚠️ **灾难性错误**：如果三个环境用了相同的 S3 key，它们会共享同一个 state 文件 —— 一个环境 apply 会覆盖另一个环境的 state 记录，造成配置混乱。**不同环境必须用不同 key**。
+
+---
+
+### 🪣 4. S3 远程后端
+
+写 `bootstrap.sh` 一键创建 S3 state 桶（参考 Day 4 的示例）：
+
+要求：
+
+- 桶名格式：`<你的名字>-tfstate`（保持全局唯一性）
+- 启用版本控制（方便 state 误操作时恢复）
+- 启用服务端加密 (AES256)
+- 拒绝阻断所有公有访问
+- 提供一个"一键配置"提示
+
+然后在每个环境的 `backend.tf` 引用此桶。
+
+---
+
+### 📄 5. `.gitignore`
+
+排除以下内容：
+
+- `.terraform/` 整个目录
+- 所有 `.tfstate` 和 `.tfstate.*` 文件
+- `crash.log`
+- `override.tf` 和 `override.tf.json`
+
+> 💡 **易错点**：`.terraform.lock.hcl` **应该提交到 Git**，而不是放 .gitignore 里 —— 它保证团队所有成员和 CI 都使用相同版本的 provider，避免"在我的电脑上能跑"的问题。
+
+---
+
+### ▶️ 6. 运行流程（验证你的实现）
+
+```bash
+# 1. 先跑 bootstrap 创建 S3 桶
+cd /Users/yangpei/Desktop/k8s/terraform-learning/practice
+bash bootstrap.sh <你的名字>-tfstate
+
+# 2. 部署 dev 环境
+cd environments/dev
+terraform init
+terraform fmt
+terraform validate
+terraform plan
+terraform apply -auto-approve
+
+# 3. 部署 staging 环境
+cd ../staging
+terraform init
+terraform plan
+terraform apply
+
+# 4. 部署 prod 环境
+cd ../prod
+terraform init
+terraform plan
+terraform apply
+
+# 5. 查看输出（观察 sensitive 值的行为）
+cd ../dev
+terraform output
+terraform output -json connection_string
+
+# 6. 演示易错点（故意制造错误，验证你的代码能防御）：
+#    a) 改 tfvars 中 environment = "dev2" → validate 应报校验错误
+#    b) 改 replicas = 0 → validate 应报校验错误
+```
+
+---
+
+### ✅ 7. 自查清单
+
+实现时请特别留意以下几点 —— 它们都是实际工作中的高频踩坑点：
+
+- [ ] `for_each` 能否直接用在 list 类型上？（不能，需要 `toset()` 转换）
+- [ ] `count` 的索引偏移风险：在列表中间删除一项后，后续资源会怎样？
+- [ ] `environment` 变量没有 default —— 如果调用方忘了传，Terraform 会怎样？
+- [ ] `sensitive = true` 的输出，state 文件里是否仍是明文？（是！）
+- [ ] 后端配置 `backend "s3"` 中三个环境的 `key` 是否确保不同？
+- [ ] `terraform fmt` 是否在所有 .tf 文件上统一执行过？
+- [ ] `terraform validate` 在 `init` 之前跑会报错吗？
+- [ ] 数据源读取 `for_each` 创建的文件时，用第几个 key 来读？硬编码 `[0]` 是否安全？
+- [ ] `.terraform.lock.hcl` 应该 commit 还是 gitignore？
+
+---
+
+### 🧹 8. 清理
+
+```bash
+# 验证无误后，销毁所有环境
+cd /Users/yangpei/Desktop/k8s/terraform-learning/practice/environments/dev && terraform destroy -auto-approve
+cd ../staging && terraform destroy -auto-approve
+cd ../prod && terraform destroy -auto-approve
+```

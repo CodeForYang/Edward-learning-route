@@ -17,6 +17,7 @@
 | **ENI** | Elastic Network Interface | 虚拟网卡，挂到 EC2 上提供网络接入 |
 | **EIP** | Elastic IP | 固定的公网 IP，可随时绑定/解绑 EC2 |
 | **IGW** | Internet Gateway | VPC 访问互联网的大门 |
+| **CIDR** | Classless Inter-Domain Routing | IP 地址段表示法（如 10.0.0.0/16），定义 VPC/子网/路由规则/安全组时处处用到 |
 | **NAT** | Network Address Translation | 让私有子网的资源能访问公网（单向） |
 | **AZ** | Availability Zone | 可用区（物理隔离的数据中心），如 ap-northeast-1a |
 | **Region** | — | AWS 区域（地理区域），如 ap-northeast-1（东京） |
