@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>呼和浩特→哈尔滨 21天摩旅路线 | Kove 800X</title>
+<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+  :root { --bg:#12121f; --card:#18182a; --border:#1e1e3a; --text:#b8b8c8; --red:#e94560; --green:#2ecc71; --blue:#3498db; --orange:#f39c12; --purple:#9b59b6; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); overflow:hidden; height:100vh; display:flex; flex-direction:column; }
+  .header { background:linear-gradient(135deg,#0a0a16 0%,#18182a 100%); padding:10px 20px; text-align:center; border-bottom:1px solid var(--border); flex-shrink:0; }
+  .header h1 { font-size:1.5em; color:#fff; }
+  .stats { display:flex; justify-content:center; gap:24px; margin-top:4px; flex-wrap:wrap; }
+  .stat .num { font-size:1.3em; font-weight:bold; color:var(--red); }
+  .stat .lbl { font-size:0.7em; color:#666; display:block; }
+  .main { display:flex; flex:1; overflow:hidden; }
+  #map { flex:1; min-width:0; }
+  .panel { width:430px; background:#0a0a16; display:flex; flex-direction:column; border-left:1px solid var(--border); flex-shrink:0; }
+  .tabs { display:flex; border-bottom:1px solid var(--border); }
+  .tab { flex:1; text-align:center; padding:9px; cursor:pointer; font-size:0.85em; color:#666; border-bottom:2px solid transparent; transition:0.2s; }
+  .tab.active { color:var(--red); border-bottom-color:var(--red); }
+  .tab-content { flex:1; overflow-y:auto; display:none; padding:8px; }
+  .tab-content.active { display:block; }
+  .phase-bar { padding:6px 10px; border-radius:3px; font-weight:bold; font-size:0.78em; cursor:pointer; color:#fff; margin:4px 0 2px; }
+  .day-row { display:flex; align-items:center; padding:6px 8px; cursor:pointer; border-radius:3px; gap:7px; font-size:0.82em; }
+  .day-row:hover,.day-row.sel { background:var(--card); }
+  .day-num { min-width:30px; height:20px; border-radius:10px; text-align:center; line-height:20px; font-size:0.68em; font-weight:bold; color:#fff; flex-shrink:0; }
+  .day-info { flex:1; min-width:0; }
+  .day-city { color:#ddd; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .day-meta { font-size:0.7em; color:#555; }
+  .tag { display:inline-block; font-size:0.62em; padding:1px 5px; border-radius:3px; margin-left:3px; }
+  .tag-ride { background:#0a1a2a; color:#4fc3f7; }
+  .tag-rest { background:#0a1a0a; color:#66bb6a; }
+  .tag-camp { background:#2a1a0a; color:#ffb74d; }
+  .tag-detour { background:#1a0a2a; color:#ba95d6; }
+  .card { background:var(--card); border-radius:6px; padding:14px; margin-bottom:10px; border:1px solid var(--border); }
+  .card h3 { font-size:1em; color:#fff; margin-bottom:4px; }
+  .emoji-hero { font-size:3em; text-align:center; padding:16px 0; }
+  .desc { font-size:0.8em; color:#888; line-height:1.5; }
+  .sec { margin:10px 0; }
+  .sec h4 { font-size:0.8em; color:var(--orange); margin-bottom:4px; border-left:2px solid var(--orange); padding-left:7px; }
+  .sec p,.sec li { font-size:0.78em; line-height:1.55; color:#999; }
+  .sec ul { list-style:none; padding:0; }
+  .sec li { padding:2px 0; }
+  .sec li::before { content:'\25B8 '; color:var(--blue); }
+  .route-code { background:#0a0a1a; border-radius:3px; padding:6px 10px; font-family:monospace; font-size:0.75em; color:#8be9fd; margin:4px 0; }
+  .warn { background:#1f1500; border-left:3px solid var(--orange); border-radius:3px; padding:7px 10px; font-size:0.78em; color:#e6b800; margin:6px 0; }
+  .along-item { display:flex; gap:8px; padding:5px 0; border-bottom:1px solid #111; align-items:flex-start; }
+  .along-badge { font-size:0.62em; padding:2px 6px; border-radius:3px; white-space:nowrap; flex-shrink:0; }
+  .badge-must { background:#27ae60; color:#fff; }
+  .badge-detour { background:#f39c12; color:#fff; }
+  .badge-pass { background:#3498db; color:#fff; }
+  .along-text { font-size:0.76em; color:#aaa; line-height:1.45; }
+  .along-text strong { color:#ddd; }
+  .legend { position:absolute; bottom:20px; left:10px; background:rgba(0,0,0,0.88); padding:8px 12px; border-radius:5px; z-index:1000; font-size:0.68em; }
+  .legend i { display:inline-block; width:14px; height:3px; border-radius:2px; margin-right:5px; }
+  @media (max-width:900px) { .main { flex-direction:column; } .panel { width:100%; max-height:38vh; } #map { height:62vh; } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🏍️ 兰州 → 哈尔滨 · 28天摩旅大环线</h1>
+  <div class="stats">
+    <div class="stat"><span class="num">28</span><span class="lbl">总天数</span></div>
+    <div class="stat"><span class="num">19</span><span class="lbl">骑行日</span></div>
+    <div class="stat"><span class="num">~5,000</span><span class="lbl">总里程 km</span></div>
+    <div class="stat"><span class="num">9</span><span class="lbl">休整日</span></div>
+    <div class="stat"><span class="num">~260</span><span class="lbl">日均骑行 km</span></div>
+    <div class="stat"><span class="num">轻装</span><span class="lbl">🎒 酒店为主</span></div>
+  </div>
+</div>
+
+<div class="main">
+  <div id="map"></div>
+  <div class="panel">
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('list')">📋 行程</div>
+      <div class="tab" onclick="switchTab('detail')">📍 详情</div>
+    </div>
+    <div id="listContent" class="tab-content active"></div>
+    <div id="detailContent" class="tab-content"></div>
+  </div>
+</div>
+
+<!-- Leaflet: BootCDN primary, jsdelivr fallback -->
+<script>
+window._leafletReady = false;
+</script>
+<script src="https://cdn.bootcdn.net/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+if (typeof L !== 'undefined') { window._leafletReady = true; }
+else {
+  document.write('<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"><\/script>');
+}
+</script>
+
+<script>
+// ==================== DATA ====================
+const PH = [
+  { id:1, name:'一：兰州→甘南→银川',  color:'#e74c3c', icon:'🏔️', days:[1,6] },
+  { id:2, name:'二：银川→呼和浩特',    color:'#e94560', icon:'🏜️', days:[7,9] },
+  { id:3, name:'三：呼和浩特→大同→应县', color:'#e67e22', icon:'🏯', days:[10,12] },
+  { id:4, name:'四：晋北→锡林郭勒草原', color:'#2ecc71', icon:'🌿', days:[13,16] },
+  { id:5, name:'五：大兴安岭西麓→呼伦贝尔', color:'#3498db', icon:'🌲', days:[17,21] },
+  { id:6, name:'六：大兴安岭→黑河',    color:'#f39c12', icon:'🍂', days:[22,25] },
+  { id:7, name:'七：黑河→哈尔滨',      color:'#9b59b6', icon:'🏙️', days:[26,28] },
+];
+
+const DAYS = [
+  { d:1, t:'rest', city:'兰州',      lat:36.0611,lng:103.8343, route:'抵达，取车休整', km:0, tag:'休整' },
+  { d:2, t:'ride', city:'合作',      lat:34.9834,lng:102.9113, route:'兰州→合作', km:260, tag:'骑行' },
+  { d:3, t:'ride', city:'合作',      lat:34.9834,lng:102.9113, route:'洛克之路往返', km:200, tag:'骑行 🔄' },
+  { d:4, t:'ride', city:'中卫',      lat:37.5136,lng:105.1884, route:'合作→中卫', km:350, tag:'骑行' },
+  { d:5, t:'ride', city:'银川',      lat:38.4872,lng:106.2309, route:'中卫→银川(西夏王陵)', km:200, tag:'骑行' },
+  { d:6, t:'rest', city:'银川',      lat:38.4872,lng:106.2309, route:'银川深度游', km:50, tag:'人文' },
+  { d:7, t:'ride', city:'鄂尔多斯',  lat:39.6083,lng:109.7813, route:'银川→鄂尔多斯', km:340, tag:'骑行' },
+  { d:8, t:'ride', city:'呼和浩特',  lat:40.8424,lng:111.7490, route:'鄂尔多斯→呼和浩特', km:280, tag:'骑行' },
+  { d:9, t:'rest', city:'呼和浩特',  lat:40.8424,lng:111.7490, route:'呼和浩特深度游', km:30, tag:'人文' },
+  { d:10,t:'ride', city:'大同',      lat:40.0768,lng:113.3001, route:'呼和浩特→大同', km:260, tag:'骑行' },
+  { d:11,t:'ride', city:'应县',      lat:39.5600,lng:113.1900, route:'云冈石窟→应县木塔', km:120, tag:'骑行' },
+  { d:12,t:'ride', city:'张家口(崇礼)',lat:40.9746,lng:115.2816, route:'应县→张家口', km:250, tag:'骑行' },
+  { d:13,t:'ride', city:'太仆寺旗',  lat:41.8773,lng:115.2841, route:'张家口→太仆寺旗', km:200, tag:'骑行' },
+  { d:14,t:'ride', city:'锡林浩特',  lat:43.9441,lng:116.0866, route:'太仆寺旗→锡林浩特', km:200, tag:'骑行' },
+  { d:15,t:'ride', city:'东乌珠穆沁',lat:45.5230,lng:116.9721, route:'锡林浩特→东乌珠穆沁', km:230, tag:'骑行' },
+  { d:16,t:'ride', city:'阿尔山',    lat:47.1775,lng:119.9435, route:'东乌珠穆沁→阿尔山', km:380, tag:'骑行 🔄' },
+  { d:17,t:'rest', city:'阿尔山',    lat:47.1775,lng:119.9435, route:'阿尔山全天', km:60, tag:'自然' },
+  { d:18,t:'ride', city:'海拉尔',    lat:49.2130,lng:119.7643, route:'阿尔山→海拉尔', km:300, tag:'骑行' },
+  { d:19,t:'ride', city:'满洲里',    lat:49.5976,lng:117.3771, route:'海拉尔→满洲里', km:200, tag:'骑行' },
+  { d:20,t:'ride', city:'根河',      lat:50.7800,lng:121.5200, route:'满洲里→根河', km:340, tag:'骑行' },
+  { d:21,t:'rest', city:'根河',      lat:50.7800,lng:121.5200, route:'根河深度游', km:50, tag:'人文' },
+  { d:22,t:'ride', city:'加格达奇',  lat:50.4200,lng:124.1200, route:'根河→加格达奇', km:360, tag:'骑行 🔄' },
+  { d:23,t:'ride', city:'嫩江',      lat:49.1857,lng:125.2200, route:'加格达奇→嫩江', km:200, tag:'骑行' },
+  { d:24,t:'ride', city:'黑河',      lat:50.2500,lng:127.4800, route:'嫩江→黑河', km:220, tag:'骑行' },
+  { d:25,t:'rest', city:'黑河',      lat:50.2500,lng:127.4800, route:'黑河全天', km:30, tag:'人文' },
+  { d:26,t:'ride', city:'北安',      lat:48.2416,lng:126.5197, route:'黑河→北安', km:310, tag:'骑行 🔄' },
+  { d:27,t:'ride', city:'哈尔滨',    lat:45.8038,lng:126.5350, route:'北安→哈尔滨', km:290, tag:'骑行' },
+  { d:28,t:'rest', city:'哈尔滨',    lat:45.8038,lng:126.5350, route:'哈尔滨/返程', km:0, tag:'人文' },
+];
+
+const SIDES = [
+  { name:'洛克之路',   lat:34.60, lng:103.20, type:'detour',
+    desc:'扎古录镇→扎尕那方向，高山石峰+草甸+碎石路。Kove 800X 越野路段的精华。不进扎尕那村（门票80元+排队）。骑到石峰群调头返回。' },
+  { name:'米拉日巴佛阁',lat:34.98, lng:102.91, type:'pass',
+    desc:'合作市区，九层藏式佛阁。红白黑三色极其强烈。晚上有灯光。拍外观即可。' },
+  { name:'西夏王陵',   lat:38.43, lng:105.99, type:'detour',
+    desc:'东方金字塔。9座帝王陵散落贺兰山下荒漠中。没有彩旗没有叫卖。门票75元。' },
+  { name:'杀虎口',     lat:40.25, lng:112.00, type:'detour',
+    desc:'明长城关口，"走西口"起点。残存长城+清代商贸街+几乎没人的博物馆。呼和浩特→大同途中绕行约15km。' },
+  { name:'云林寺',     lat:40.36, lng:113.75, type:'detour',
+    desc:'明代壁画"水陆画绝唱"。门常锁，找管理员开门给10-20元小费。大同→张家口途中绕行约10km。' },
+  { name:'元上都遗址', lat:42.35, lng:116.15, type:'detour',
+    desc:'世界文化遗产，忽必烈的夏都。三重城垣遗址犹在，游客寥寥。太仆寺旗附近绕行约15km。' },
+  { name:'金界壕',     lat:45.20, lng:117.50, type:'pass',
+    desc:'金代长城，横穿草原的土垄，比明长城早400年。G331沿途可见，不需绕路。停车走到土垄上，摸一下八百年前的夯土。' },
+  { name:'诺门罕',     lat:46.85, lng:119.20, type:'detour',
+    desc:'1939年苏蒙联军vs日本关东军。朱可夫一战成名，二战走向因此改变。草原上的锈蚀坦克残骸+几乎没人的陈列馆。绕行约40km。' },
+  { name:'巴彦呼硕敖包',lat:48.45, lng:119.80, type:'detour',
+    desc:'《敖包相会》诞生地。山坡上巨大敖包俯瞰伊敏河草原，几乎没有游客。阿尔山→海拉尔途中绕行约20km。' },
+  { name:'黑山头古城', lat:50.10, lng:119.45, type:'detour',
+    desc:'成吉思汗大弟哈萨尔的城池遗址。只剩夯土城墙轮廓，站城墙上俯瞰根河湿地。没有任何旅游设施。绕行约20km。' },
+  { name:'嘎仙洞',     lat:50.65, lng:123.60, type:'detour',
+    desc:'鲜卑人祖庙。洞壁上有北魏太平真君四年石刻祝文。拓跋鲜卑从嘎仙洞→大同→洛阳的历史起点。门票约30元，几乎没有游客。绕行约30km。' },
+  { name:'布苏里要塞', lat:50.55, lng:123.85, type:'detour',
+    desc:'冷战时期中国最大地下军事要塞。深埋山体中的地下油库、弹药库、指挥所。比博物馆更真实的冷战遗存。绕行约15km。' },
+  { name:'五大连池',   lat:48.70, lng:126.10, type:'detour',
+    desc:'中国最年轻火山群（1719-1721年喷发）。火山锥+堰塞湖+熔岩地貌。精华在老黑山火山口。黑河→北安途中绕行约30km。' },
+];
+
+const CITY = {
+  '兰州':{
+    hero:'🏔️🍜', desc:'黄河穿城而过，马踏飞燕真品所在地。旅程从一碗牛肉面开始。',
+    road:{ from:'—', via:'—', surface:'—', gas:'—', note:'广州→兰州航班多。摩托车提前一周发物流。中川机场距市区约60km。' },
+    stay:[{ name:'正宁路附近亚朵/假日酒店', why:'步行到正宁路夜市5分钟', price:'300-400元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>甘肃省博物馆</strong> — 马踏飞燕真品（中国旅游标志）。免费，1.5小时。周一闭馆。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>正宁路夜市</strong> — 牛奶鸡蛋醪糟（上过《舌尖》）、烤肉、甜醅子。和银川怀远夜市风格不同。' },
+    ],
+    food:['正宁路夜市：牛奶鸡蛋醪糟、烤肉、灰豆子','早餐：牛肉面（任何一家排队的都行）'],
+  },
+  '合作':{
+    hero:'🏔️🌿', desc:'甘南藏族自治州首府，洛克之路的起点。海拔2,900m，被高山草甸包围。',
+    road:{ from:'兰州', via:'G213 → 临夏 → 合作', surface:'全程柏油路', gas:'临夏有中石油', note:'临夏→合作段地貌变化剧烈，黄土丘陵→高山草甸。尕海在路边。' },
+    stay:[{ name:'合作甘南饭店/合作国际大酒店', why:'甘南州府，条件好', price:'200-350元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>洛克之路</strong> — Day 3往返。导航"扎古录镇"，进入江迭公路往南，骑到看到扎尕那石峰群折返。不进扎尕那村。碎石路+Kove 800X越野+H4,000m垭口。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>米拉日巴佛阁</strong> — 合作市区，九层藏式佛阁，红白黑三色，晚上有灯光。' },
+      { badge:'沿途', cls:'badge-pass', text:'<strong>尕海</strong> — G213路边的高原湖泊，8月湖水最满。不用进景区。' },
+    ],
+    food:['临夏午饭：手抓羊肉+河州包子','合作：藏餐和清真餐厅都有'],
+  },
+  '中卫':{
+    hero:'🏜️🌅', desc:'宁夏中西部，黄河与沙漠交界。从青藏高原下降到荒漠的过渡站。',
+    road:{ from:'合作', via:'G213返程→转G6/G70→中卫', surface:'全程柏油路', gas:'临夏、白银有加油站', note:'这一天经历高山草甸→黄土丘陵→荒漠边缘的地貌剧变。' },
+    stay:[{ name:'中卫大酒店/中卫宾馆', why:'干净实惠', price:'200-300元' }],
+    along:[{ badge:'沿途', cls:'badge-pass', text:'<strong>地貌过渡</strong> — 早上从合作出发满眼绿色草甸，下午入宁夏后绿色被土黄取代。整趟旅程地貌变化最剧烈的一天。' }],
+    food:['中卫市区：羊肉、面食','枸杞（中卫特产，可以买点泡水喝）'],
+  },
+  '应县':{
+    hero:'🏯🪵', desc:'应县木塔——全世界最古老、最高的全木结构塔。960年风雨，梁思成在塔下哭过。',
+    road:{ from:'大同', via:'G208→怀仁→应县', surface:'柏油路', gas:'怀仁有加油站', note:'下午4点到——夕阳斜照在塔身斗拱上极其震撼。' },
+    stay:[{ name:'应县国利宾馆', why:'辽代街旁，距木塔步行5分钟', price:'150-250元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>应县木塔</strong> — 门票60元（只进第一层）。绕塔走一圈，南面下午光线最好。塔身明显向北倾斜，不知道还能看几次。' },
+    ],
+    food:['应县凉粉：芥末味，和山西别处凉粉不一样','熏肉大饼'],
+  },
+  '呼和浩特':{
+    hero:'🕌🐎', desc:'青城，内蒙古首府。最好的省级博物馆之一 + 几乎没有游客的明代佛寺。',
+    road:{ from:'—', via:'—', surface:'—', gas:'—', note:'广州→呼和浩特航班多。摩托车提前一周发物流托运。白塔机场距市区约15km。' },
+    stay:[{ name:'大召寺附近锦颐/亚朵', why:'步行到大召、五塔寺，周边回民区街巷真实不商业', price:'300-450元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>内蒙古博物院</strong> — 不用预约、不用排队、免费。恐龙厅的查干诺尔龙从二楼贯穿到一楼。草原文明通史展是理解后面所有旅程的知识框架。预留3小时。周一闭馆。' },
+      { badge:'必去', cls:'badge-must', text:'<strong>五塔寺</strong>（金刚座舍利宝塔） — 下午光线透过塔身雕刻时，整个院子可能就你一个人。塔后照壁上的蒙文天文图石刻全世界独此一件。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>清真大寺</strong> — 望月楼可爬上去，俯瞰回民区的老房子和街巷——不是人造风情街，是真实的生活区。' },
+      { badge:'可去', cls:'badge-pass', text:'<strong>塞上老街</strong> — 商业化程度中等，傍晚随便逛一下就行。' },
+    ],
+    food:['格日勒阿妈奶茶馆：锅茶+手把肉+酸奶饼（蒙餐标杆）','回民区宽巷子：烧麦、羊杂碎（本地人吃的）'],
+  },
+  '大同':{
+    hero:'🏯🪨', desc:'三代京华，两朝重镇。悬空寺的奇险 + 云冈石窟的庄严 + 善化寺的宁静。',
+    road:{ from:'呼和浩特', via:'G209 → 和林格尔 → 右玉 → 左云 → 大同', surface:'全程柏油路', gas:'右玉可补油', note:'右玉段风景优美——塞上绿洲，8月沿途全是绿色丘陵。' },
+    stay:[{ name:'大同古城内民宿（善化寺附近）', why:'晚上出来散步就是华严寺和城墙，古城夜晚很安静', price:'200-400元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>悬空寺</strong> — 8点前到！买登临票（100元），登上去的体验和下面看完全不同。8:30后旅行团到达。限流，上午去最保险。' },
+      { badge:'必去', cls:'badge-must', text:'<strong>云冈石窟</strong> — 下午2-4点光线斜射进窟内，佛像面容栩栩如生。第20窟大佛是标志性机位。' },
+      { badge:'必去', cls:'badge-must', text:'<strong>善化寺</strong> — 免费，游客比华严寺少得多。辽代大殿+金代山门，梁思成盛赞过。可以在大殿门槛上坐一下午。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>大同博物馆（新馆）</strong> — 免费，比很多省博还强的市级馆，建筑本身就是艺术品。' },
+      { badge:'沿途', cls:'badge-detour', text:'<strong>杀虎口</strong> — 呼和浩特→大同途中。明长城关口，"走西口"的起点。残存长城+几乎没有游客的博物馆。绕行约15km。' },
+      { badge:'沿途', cls:'badge-detour', text:'<strong>阳高云林寺</strong> — 大同→张家口途中。明代壁画"水陆画绝唱"。门常锁，找旁边管理员开门，10-20元小费。绕行约10km。' },
+    ],
+    food:['凤临阁：百花烧麦（老字号，建筑像宫殿）','东方削面：刀削面+卤蛋+豆腐干（本地人吃的）'],
+    warn:'悬空寺附近有人说带路去"更好的拍摄点"——全是骗局。对面观景台就是最佳机位。',
+  },
+  '张家口(崇礼)':{
+    hero:'🏔️🛤️', desc:'冬奥小城，草原天路东段起点。8月下旬金黄色山野+风车阵。',
+    road:{ from:'大同', via:'G109 → 阳原 → G239 → 崇礼', surface:'柏油路', gas:'崇礼城区充足', note:'工作日走草原天路，周末车多。天路全线限速40，急弯多。' },
+    stay:[{ name:'崇礼城区连锁酒店', why:'冬奥后条件很好，淡季价格实惠', price:'200-350元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>草原天路东段</strong> — 从崇礼桦皮岭方向进入，比野狐岭进人少。清晨晨雾+风车阵。8月下旬草已变黄，另一种美。' },
+      { badge:'沿途', cls:'badge-pass', text:'<strong>天镇慈云寺</strong> — 大同→张家口途中经过天镇县。辽代建筑，几乎没有游客。顺路不需绕行。' },
+    ],
+    food:['崇礼城区：莜面窝窝、烤羊腿'],
+  },
+  '太仆寺旗':{
+    hero:'🌿🐴', desc:'正式进入内蒙古大草原。元上都遗址所在地。',
+    road:{ from:'张家口(崇礼)', via:'草原天路西行 → 野狐岭出 → G207 → 太仆寺旗', surface:'柏油路', gas:'太仆寺旗有加油站', note:'过野狐岭后地貌从山地正式过渡到草原——停车拍个延时。' },
+    stay:[{ name:'太仆寺旗宾馆', why:'干净，摩托车可停院内', price:'150-250元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>元上都遗址</strong> — 世界文化遗产，游客寥寥。三重城垣遗址犹在，站在宫城遗址上往四周看——方圆几公里只有草原和风。距太仆寺旗约30km，绕行约15km。' },
+      { badge:'沿途', cls:'badge-pass', text:'<strong>金莲川草原</strong> — 元上都所在的草原。8月金莲花期已过，但草原本身一望无际。' },
+    ],
+    food:['蒙餐馆：手把肉、奶茶、蒙古馅饼','注意：小地方晚上关店早，8点前吃饭'],
+  },
+  '锡林浩特':{
+    hero:'🌋🐴', desc:'锡林郭勒盟首府。平顶山火山群是隐藏宝藏——日落时火山锥+草原的画面一生难忘。',
+    road:{ from:'太仆寺旗', via:'G207一路向北 → 正蓝旗 → 锡林浩特', surface:'全程柏油路，路况极好', gas:'正蓝旗、锡林浩特都有', note:'G207这段是草原公路经典——笔直平坦一望无际。注意横风。' },
+    stay:[{ name:'锡林浩特市区酒店（如家/汉庭）', why:'条件不错，8月草原夜间凉爽不用空调', price:'200-300元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>平顶山火山群</strong> — 免费。日落前1小时到——夕阳+火山锥+草原=一生难忘的画面。无人机高空俯拍火山锥阵列。距市区约30km。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>贝子庙</strong> — 免费，早晨去最安静。内蒙古四大庙宇之一。' },
+      { badge:'沿途', cls:'badge-pass', text:'<strong>金界壕（金长城）</strong> — G207/G331沿途可见。草原上突然出现一道土垄——金代修建的边境防御工事，800年风雨后只剩轮廓。停车走到土垄上。不需绕路。' },
+    ],
+    food:['玛拉沁蒙餐馆：手把肉、烤羊排、蒙古包子','早餐：奶茶+蒙古果子+奶嚼口'],
+    warn:'草原蚊虫极多，防蚊面罩必备。8月夜间可能降至15°C，带一件薄外套。',
+  },
+  '东乌珠穆沁':{
+    hero:'🐎🌅', desc:'乌珠穆沁草原——中国最美草原之一，游客罕至。',
+    road:{ from:'锡林浩特', via:'G331 → 西乌珠穆沁 → 东乌珠穆沁', surface:'全程柏油路', gas:'西乌旗和东乌旗都有加油站', note:'乌珠穆沁草原比锡林郭勒更原始、更辽阔——内蒙古草原的精华段。' },
+    stay:[{ name:'东乌旗宾馆', why:'旗里住宿不多，建议提前电话预订', price:'150-250元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>乌珠穆沁草原深处</strong> — 从东乌旗向东北骑行30-50km，真正的无人草原——没有景区大门、没有门票、没有游客。只有你和草原上的马群。' },
+      { badge:'沿途', cls:'badge-pass', text:'<strong>西乌旗草原</strong> — 锡林浩特→东乌旗途中经过。沿途全是草原，随处可以停下来拍照。' },
+    ],
+    food:['乌珠穆沁羊肉（内蒙最好的羊种之一）','手把肉、血肠、肉肠'],
+    warn:'东乌旗→阿尔山是此行最长单日骑行（~380km含绕行诺门罕），途中有较长区间无加油站，出发前务必在东乌旗加满油+备5L油囊。',
+  },
+  '阿尔山':{
+    hero:'🌋🏞️', desc:'大兴安岭西南麓的火山温泉小城。哈拉哈河贯穿整个区域——不冻河、杜鹃湖、三潭峡都是这条河的化身。',
+    road:{ from:'东乌珠穆沁', via:'G331 → 宝格达山林场 → 阿尔山（绕行诺门罕约+40km）', surface:'前段草原公路，进入林场后部分路段较窄有碎石', gas:'⚠️ 东乌旗出发后约200km无加油站！满油+备油囊', note:'4小时内经历三个世界：草原→疏林→密林→火山地貌。诺门罕遗址在途中绕行。' },
+    stay:[{ name:'阿尔山市区酒店（阿尔山海神温泉酒店等）', why:'有温泉可泡，缓解长途骑行疲劳', price:'300-500元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>诺门罕战役遗址</strong> — 东乌旗→阿尔山途中绕行约40km。草原上的锈蚀坦克残骸+几乎没有人的陈列馆。1939年朱可夫在此一战成名，二战走向因此改变。' },
+      { badge:'必去', cls:'badge-must', text:'<strong>阿尔山天池</strong> — 998级台阶上去，火山口湖镶嵌在森林中。航拍整个天池全貌。' },
+      { badge:'必去', cls:'badge-must', text:'<strong>杜鹃湖</strong> — 清晨5-6点晨雾+森林倒影。Pocket 3固定机位延时1小时。' },
+      { badge:'必去', cls:'badge-must', text:'<strong>不冻河</strong> — 哈拉哈河支流段，地热导致常年不冻，原始松林环绕。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>三潭峡</strong> — 哈拉哈河源头峡谷，河水在火山岩中切出三层深潭。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>石塘林</strong> — 火山熔岩地貌，黑色玄武岩上长出松林——植物从石头缝里长出来的样子极其震撼。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>驼峰岭天池</strong> — 比阿尔山天池更原始，游客更少。山形像骆驼峰。' },
+      { badge:'沿途', cls:'badge-pass', text:'<strong>宝格达山林场</strong> — 东乌旗→阿尔山途经。草原到森林的过渡带，地貌变化本身就是风景。' },
+    ],
+    food:['铁锅炖（大鹅/排骨）','东北菜：锅包肉、地三鲜（进入东北饮食圈）'],
+    warn:'阿尔山国家森林公园门票180元（48h有效），自驾车可开进去。林区防火极严——绝对禁止野外生火。8月底夜间可能降至5-8°C，带保暖内衣。',
+  },
+  '海拉尔':{
+    hero:'🌾🏙️', desc:'呼伦贝尔市中心。进入真正的大草原核心区。',
+    road:{ from:'阿尔山', via:'G331 → 伊尔施 → 红花尔基 → 海拉尔', surface:'全程柏油路', gas:'红花尔基可补油', note:'红花尔基樟子松林——亚洲最大樟子松林，森林+草原交界地带。' },
+    stay:[{ name:'海拉尔市区全季/亚朵', why:'条件好', price:'250-400元' }],
+    along:[
+      { badge:'沿途', cls:'badge-pass', text:'<strong>红花尔基樟子松林</strong> — 阿尔山→海拉尔途中。亚洲最大樟子松林，无人机拍林海。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>巴彦呼硕敖包</strong> — 阿尔山→海拉尔途中可绕行约20km。《敖包相会》诞生地，山坡上巨大敖包俯瞰伊敏河草原，几乎没有游客。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>呼伦贝尔民族博物馆</strong> — 免费。了解鄂温克、鄂伦春、达斡尔三少民族文化——为后面根河敖鲁古雅做知识储备。' },
+    ],
+    food:['卢布里西餐厅：俄式大餐（满洲里也有分店）','诺敏塔拉奶茶馆：蒙餐','布里亚特包子'],
+  },
+  '满洲里':{
+    hero:'🇨🇳🇷🇺', desc:'中俄边境口岸城市。婚礼宫日落是唯一的必做事项。',
+    road:{ from:'海拉尔', via:'G301 → 陈巴尔虎旗 → 满洲里', surface:'呼伦贝尔草原核心段', gas:'沿途有加油站', note:'G301沿途是"风吹草低见牛羊"的真实写照。' },
+    stay:[{ name:'满洲里市区酒店', why:'市区不大', price:'250-400元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>婚礼宫</strong> — 山顶东正教堂。日落前1小时到——夕阳+洋葱顶+城市背景。Pocket 3延时+无人机全景。' },
+      { badge:'沿途', cls:'badge-pass', text:'<strong>呼和诺尔湖</strong> — 海拉尔→满洲里途中可绕行约10km。草原上的湖泊，比呼伦湖更安静。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>扎赉诺尔猛犸象遗址</strong> — 满洲里附近。1980年在此出土了中国最大的猛犸象化石。有一个小博物馆。' },
+      { badge:'跳过', cls:'badge-detour', text:'<strong>国门景区 · 套娃广场</strong> — 商业化程度极高，门票贵，和你的偏好冲突。国门门口看一眼就行，不用买票进去。' },
+    ],
+    food:['卢布里西餐厅（俄式大餐，人均150）','俄罗斯大肉串、格瓦斯'],
+    warn:'满洲里整体是旅游城市，商业气息浓。建议只在市区闲逛+婚礼宫拍日落即可。',
+  },
+  '根河':{
+    hero:'🦌🌲', desc:'中国冷极（-58°C记录）。敖鲁古雅——驯鹿鄂温克族真正的家园，不是人造景区。',
+    road:{ from:'满洲里', via:'G332 → 额尔古纳 → S301 → 根河', surface:'额尔古纳后林区路较窄', gas:'⚠️ 额尔古纳后加油站减少，出发前加满', note:'额尔古纳湿地是王炸——亚洲第一湿地，航拍视角如大地血脉。在此多停1-2小时。' },
+    stay:[{ name:'根河市区宾馆/酒店', why:'小城市选择有限但干净实惠', price:'150-250元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>敖鲁古雅驯鹿部落</strong> — 上午去，驯鹿比较活跃。30元买苔藓喂鹿。这是驯鹿鄂温克真正的聚居地，不是人造景区。比漠河的驯鹿园更正宗。' },
+      { badge:'必去', cls:'badge-must', text:'<strong>额尔古纳湿地</strong> — 满洲里→根河途中必经。亚洲第一湿地。游客中心有观景台，但无人机视角才是完全体——河流蜿蜒如大地血脉。' },
+      { badge:'沿途', cls:'badge-pass', text:'<strong>白桦林</strong> — 满洲里→根河途中随处可见。随意找一片安静的白桦林，逆光拍摄白桦树干。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>黑山头古城遗址</strong> — 满洲里→根河途中绕行约20km。成吉思汗大弟哈萨尔的城池。只剩夯土墙轮廓，站在城墙上俯瞰根河湿地。没有任何旅游设施。' },
+      { badge:'可去', cls:'badge-pass', text:'<strong>中国冷极点</strong> — 根河市区附近，打卡即可。中国历史最低气温-58°C记录地。' },
+    ],
+    food:['铁锅炖（进入大兴安岭后的招牌）','山野菜：蘑菇、木耳、蕨菜（本地产的才鲜）','野生蓝莓制品'],
+    warn:'根河→加格达奇全程林区，部分路段无手机信号→提前下载离线地图。加油站间隔80-100km→注意油量。防火期严禁野外用火，检查站会查打火机。',
+  },
+  '加格达奇':{
+    hero:'🌲🛣️', desc:'大兴安岭林区重镇。这段路本身就是景点——300+km在白桦林和樟子松林间穿梭。',
+    road:{ from:'根河', via:'S301 → 鄂伦春旗 → 绕行嘎仙洞+30km → 加格达奇', surface:'林区柏油路+水泥路', gas:'⚠️ 间隔80-100km，鄂伦春旗可补油', note:'嘎仙洞绕行约30km——鲜卑人祖庙，洞壁上有北魏石刻祝文。' },
+    stay:[{ name:'加格达奇区酒店', why:'林区城市，条件尚可', price:'200-300元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>嘎仙洞</strong> — 根河→加格达奇途中绕行约30km。鲜卑人祖庙。1980年发现洞壁上的北魏太平真君四年石刻祝文——"我们是从这里走出去的"。拓跋鲜卑从嘎仙洞→大同→洛阳的历史起点。门票约30元，几乎没有游客。站在洞口，和你在云冈石窟看到的北魏大佛是同一个文明的起点和巅峰。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>布苏里军事要塞</strong> — 根河→加格达奇途中绕行约15km。冷战时期中国最大的地下军事要塞——深埋山体中的地下油库、弹药库、指挥所。比博物馆更真实的冷战遗存。' },
+      { badge:'沿途', cls:'badge-pass', text:'<strong>大兴安岭林区公路</strong> — 这段路本身就是景点——300+km穿行在原始次生林中。Insta360头盔视角，森林隧道+穿透树叶的光束。8月底树梢开始变色。' },
+    ],
+    food:['东北家常菜（量大实惠）','林区特产：蘑菇炖鸡、木耳炒肉','蓝莓汁/蓝莓酒'],
+    warn:'⚠️ 加格达奇→黑河段G331正在修路！100km搓板路+炮弹坑。S302也有烂路。务必走嫩江方向绕行（G111/G231），多走约50km但路况好。',
+  },
+  '嫩江':{
+    hero:'🌾🏘️', desc:'黑龙江畔的农业小城，加格达奇到黑河的中点。',
+    road:{ from:'加格达奇', via:'G111 → 大杨树 → G231 → 嫩江', surface:'柏油路，路况好', gas:'大杨树、嫩江都有', note:'从林区地貌过渡到松嫩平原——地貌再次变化。' },
+    stay:[{ name:'嫩江市内宾馆', why:'干净实惠', price:'150-250元' }],
+    along:[
+      { badge:'沿途', cls:'badge-pass', text:'<strong>嫩江江畔</strong> — 早起去江边散步。不是景点，但有真实的边境小城生活感。' },
+    ],
+    food:['东北家常菜：大拉皮、酱骨架','江鱼（嫩江产鱼，做法简单但鲜）'],
+  },
+  '黑河':{
+    hero:'🇨🇳🏙️🇷🇺', desc:'黑龙江畔的边境明珠。与俄罗斯布拉戈维申斯克市隔江相望——最窄处仅750米。瑷珲历史陈列馆是了解东北边疆史最好的地方。',
+    road:{ from:'嫩江', via:'G1211方向 → 孙吴 → 黑河', surface:'柏油路，路况好。⚠️不走G331！', gas:'沿途充足', note:'推荐住黑龙江畔江景房——拉开窗帘看到俄罗斯，全国独一份。' },
+    stay:[{ name:'黑河望江假日/望江精选酒店', why:'江景房窗外就是黑龙江和对岸俄罗斯，楼下是母亲广场和夜市', price:'300-500元（江景房值得）' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>瑷珲历史陈列馆</strong> — 全国唯一以中俄关系史为主题的博物馆。用真实史料让你感受到1858年《瑷珲条约》的历史重量。预留2小时。' },
+      { badge:'必去', cls:'badge-must', text:'<strong>中俄风情街</strong> — 傍晚逛——江风吹着，对岸俄罗斯城市的灯光逐渐亮起。不用买东西，逛的气氛本身就值得。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>旅俄华侨纪念馆</strong> — 冷门但厚重的历史博物馆，了解旅俄华侨百年历史。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>瑷珲古城遗址</strong> — 陈列馆外的古城遗址本身——残存的城墙和江边的位置，站在遗址上看黑龙江，感受比陈列馆更直接。' },
+    ],
+    food:['黑河夜市：俄罗斯大肉串、烤鱼、格瓦斯','列娜餐厅：俄式西餐（正宗且不贵）'],
+    warn:'⚠️ 黑龙江是中俄国界——无人机禁止在江边飞行！江面中心线即国界。黑龙江边蚊子极其凶猛——防蚊面罩+驱蚊液必备。',
+  },
+  '北安':{
+    hero:'🏘️🛤️', desc:'黑河到哈尔滨的中转站。途经五大连池——中国最年轻的火山群。',
+    road:{ from:'黑河', via:'G1211/G202 → 孙吴 → 绕行五大连池+30km → 北安', surface:'柏油路', gas:'沿途充足', note:'五大连池绕行约30km。火山锥+堰塞湖+熔岩地貌。精华在老黑山火山口。如果累了可跳过。' },
+    stay:[{ name:'北安市内商务酒店', why:'过夜中转', price:'150-200元' }],
+    along:[
+      { badge:'推荐', cls:'badge-detour', text:'<strong>五大连池</strong> — 黑河→北安途中绕行约30km。中国最年轻火山群（最近一次喷发1719-1721年）。火山锥+堰塞湖+熔岩地貌。老黑山火山口是精华。世界地质公园。' },
+    ],
+    food:['东北饺子馆（"上车饺子下车面"——离开东北前的饺子）'],
+  },
+  '哈尔滨':{
+    hero:'🏙️🎵', desc:'东方莫斯科，旅程终点。中央大街的面包石、索菲亚的洋葱顶、老道外的巴洛克。',
+    road:{ from:'北安', via:'G222/G10方向 → 绥化 → 哈尔滨', surface:'柏油路，接近哈尔滨时限速多', gas:'沿途充足', note:'直接导航至摩托车物流点——先发车再游玩。哈尔滨市区二环内摩托限行，外环物流园区不受影响。' },
+    stay:[{ name:'中央大街马迭尔宾馆/大公馆1903', why:'百年历史酒店，本身就是文物', price:'400-800元' },{ name:'中央大街附近亚朵/全季', why:'性价比之选', price:'300-450元' }],
+    along:[
+      { badge:'必去', cls:'badge-must', text:'<strong>老道外中华巴洛克</strong> — 比中央大街更原生态。巴洛克立面+中国四合院=哈尔滨独有建筑风格。游客少，适合慢慢逛拍。哈尔滨最被低估的历史街区。' },
+      { badge:'必去', cls:'badge-must', text:'<strong>黑龙江省博物馆</strong> — 免费，周一闭馆。黑龙江从远古到近代的完整历史。' },
+      { badge:'推荐', cls:'badge-detour', text:'<strong>哈尔滨极乐寺</strong> — 比索菲亚安静得多。东北四大名刹之一。' },
+      { badge:'可去', cls:'badge-pass', text:'<strong>索菲亚教堂 · 中央大街</strong> — 清晨去（人少+晨光打在洋葱顶上）。中央大街面包石值得走一趟——但本身就是商业街，不用花太多时间购物。' },
+    ],
+    food:['马迭尔冰棍（中央大街总店，5元原味）','华梅西餐厅：罐焖牛肉+红菜汤（百年俄式老店）','老厨家：锅包肉发源地','道外张包铺：排骨包子'],
+    warn:'哈尔滨二环内摩托限行→直接导航到物流点发车后再打车游玩。返程机票提前订，太平机场距市区约40km。',
+  }
+};
+
+// ==================== RENDER SIDEBAR FIRST ====================
+function buildList(){
+  var h='';
+  PH.forEach(function(ph){
+    h+='<div class="phase-bar" style="background:'+ph.color+'" onclick="flyToPhase('+ph.id+')">'+ph.icon+' '+ph.name+'</div>';
+    DAYS.filter(function(dd){return dd.d>=ph.days[0]&&dd.d<=ph.days[1];}).forEach(function(dd){
+      var tc=dd.t==='rest'?'tag-rest':'tag-ride';
+      var camp=dd.tag.indexOf('🏕️')>=0?'<span class="tag tag-camp">🏕️</span>':'';
+      var det=dd.tag.indexOf('🔄')>=0?'<span class="tag tag-detour">绕行</span>':'';
+      var cleanTag=dd.tag.replace(' 🔄','').replace(' 🏕️','');
+      h+='<div class="day-row" onclick="selectCity(\''+dd.city+'\','+dd.lat+','+dd.lng+')" id="row-'+dd.d+'">';
+      h+='<span class="day-num" style="background:'+ph.color+'">D'+dd.d+'</span>';
+      h+='<span class="day-info"><span class="day-city">'+dd.city+'</span>';
+      h+='<span class="day-meta">'+dd.route+' · '+dd.km+'km <span class="tag '+tc+'">'+cleanTag+'</span>'+camp+det+'</span></span>';
+      h+='</div>';
+    });
+  });
+  document.getElementById('listContent').innerHTML=h;
+}
+buildList();
+
+// ==================== MAP INIT ====================
+var map = null;
+var mapTries = 0;
+
+function tryInitMap(){
+  if (typeof L === 'undefined') {
+    mapTries++;
+    if (mapTries < 40) { setTimeout(tryInitMap, 300); }
+    else { document.getElementById('map').innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#666;text-align:center;padding:40px">🗺️ 地图 CDN 加载超时<br><span style="font-size:0.7em">请检查网络后刷新页面<br>行程列表仍可正常使用</span></div>'; }
+    return;
+  }
+  try {
+    map = L.map('map', { zoomControl: true }).setView([42.5, 112], 5);
+
+    // Multiple tile sources with automatic fallback (ordered by reliability in China)
+    var tileUrls = [
+      { name:'CartoDB', url:'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attr:'&copy; OSM &copy; CARTO' },
+      { name:'OSM',     url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attr:'&copy; OSM' },
+      { name:'OSM Hot', url:'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', attr:'&copy; OSM France' },
+    ];
+
+    var tileIndex = 0;
+    var tileLayer = L.tileLayer(tileUrls[0].url, {
+      attribution: tileUrls[0].attr, maxZoom: 13
+    });
+
+    tileLayer.on('tileerror', function() {
+      tileIndex++;
+      if (tileIndex < tileUrls.length) {
+        console.log('Tile source failed, trying: ' + tileUrls[tileIndex].name);
+        tileLayer.setUrl(tileUrls[tileIndex].url);
+        map.attributionControl.setPrefix(tileUrls[tileIndex].attr);
+      } else {
+        // All tile sources failed — routes and markers still visible on plain background
+        document.getElementById('map').style.background = '#1a1a2e';
+        console.log('All tile sources failed. Map markers and routes are still visible.');
+      }
+    });
+    tileLayer.addTo(map);
+
+    // Route polylines
+    var ROUTES = [
+      { p:1, c:[[36.0611,103.8343],[35.5,103.5],[34.9834,102.9113]] },               // 兰州→合作
+      { p:1, c:[[34.9834,102.9113],[34.6,103.2],[34.9834,102.9113]] },               // 洛克之路往返
+      { p:1, c:[[34.9834,102.9113],[36.0,104.5],[37.5136,105.1884]] },               // 合作→中卫
+      { p:1, c:[[37.5136,105.1884],[38.0,105.7],[38.43,105.99],[38.4872,106.2309]] }, // 中卫→西夏王陵→银川
+      { p:2, c:[[38.4872,106.2309],[39.2333,106.7667],[39.6083,109.7813]] },          // 银川→鄂尔多斯
+      { p:2, c:[[39.6083,109.7813],[39.6833,110.8667],[40.8424,111.7490]] },          // 鄂尔多斯→呼和浩特
+      { p:3, c:[[40.8424,111.7490],[40.25,112.0],[40.0768,113.3001]] },              // 呼和浩特→大同
+      { p:3, c:[[40.0768,113.3001],[39.9,113.5],[39.56,113.19]] },                    // 大同→应县
+      { p:3, c:[[39.56,113.19],[40.3,114.5],[40.9746,115.2816]] },                    // 应县→张家口
+      { p:4, c:[[40.9746,115.2816],[41.4,115.3],[42.35,116.15],[41.8773,115.2841]] }, // 张家口→太仆寺
+      { p:4, c:[[41.8773,115.2841],[42.8,115.7],[43.9441,116.0866]] },               // 太仆寺→锡林浩特
+      { p:4, c:[[43.9441,116.0866],[44.5833,117.6],[45.5230,116.9721]] },             // 锡林浩特→东乌旗
+      { p:4, c:[[45.5230,116.9721],[46.85,119.2],[47.1775,119.9435]] },               // 东乌旗→阿尔山
+      { p:5, c:[[47.1775,119.9435],[48.45,119.8],[48.1,119.7833],[49.2130,119.7643]] },
+      { p:5, c:[[49.2130,119.7643],[49.4,118.6],[49.5976,117.3771]] },
+      { p:5, c:[[49.5976,117.3771],[50.1,119.45],[50.0,119.5],[50.78,121.52]] },
+      { p:6, c:[[50.78,121.52],[50.65,123.6],[50.55,123.85],[50.42,124.12]] },
+      { p:6, c:[[50.42,124.12],[49.75,124.6],[49.1857,125.22]] },
+      { p:6, c:[[49.1857,125.22],[49.7,126.3],[50.25,127.48]] },
+      { p:7, c:[[50.25,127.48],[48.7,126.1],[48.2416,126.5197]] },
+      { p:7, c:[[48.2416,126.5197],[46.6333,126.9833],[45.8038,126.5350]] },
+    ];
+    ROUTES.forEach(function(r){
+      var ph=PH.find(function(p){return p.id===r.p;});
+      L.polyline(r.c,{color:ph.color,weight:4,opacity:0.7}).addTo(map);
+    });
+
+    // Detour dashed lines
+    [{f:[45.523,116.972],t:[46.85,119.2]},{f:[50.78,121.52],t:[50.65,123.6]},{f:[48.242,126.52],t:[48.7,126.1]}].forEach(function(d){
+      L.polyline([d.f,d.t],{color:'#f39c12',weight:2,dashArray:'6 6',opacity:0.5}).addTo(map);
+    });
+
+    // City markers
+    var seen={};
+    DAYS.forEach(function(d){
+      if(seen[d.city])return; seen[d.city]=true;
+      var ph=PH.find(function(p){return d.d>=p.days[0]&&d.d<=p.days[1];});
+      var isRest=d.t==='rest';
+      var m=L.circleMarker([d.lat,d.lng],{radius:isRest?8:5,fillColor:ph.color,color:'#fff',weight:2,fillOpacity:0.9}).addTo(map);
+      var daysHere=DAYS.filter(function(dd){return dd.city===d.city;});
+      var pop='<b style="color:'+ph.color+'">'+d.city+'</b>';
+      daysHere.forEach(function(cd){pop+='<br>Day '+cd.d+' · '+cd.route+' · '+cd.km+'km';});
+      m.bindPopup(pop,{maxWidth:240});
+      m.on('click',function(){selectCity(d.city,d.lat,d.lng);});
+    });
+
+    // Side trip markers
+    SIDES.forEach(function(s){
+      var icon=L.divIcon({className:'',html:'<div style="background:'+(s.type==='detour'?'#f39c12':'#3498db')+';color:#fff;width:16px;height:16px;border-radius:'+(s.type==='detour'?'3px':'50%')+';text-align:center;line-height:16px;font-size:10px;border:1px solid #fff;transform:rotate('+(s.type==='detour'?'45deg':'0deg')+')">'+(s.type==='detour'?'&#9671;':'·')+'</div>',iconSize:[16,16],iconAnchor:[8,8]});
+      var m=L.marker([s.lat,s.lng],{icon:icon}).addTo(map);
+      m.bindPopup('<b>'+s.name+'</b><br><span style="font-size:0.78em;color:#aaa">'+s.desc.substring(0,100)+'...</span>',{maxWidth:240});
+    });
+
+    // Legend
+    var legend = L.control({position:'bottomleft'});
+    legend.onAdd = function(){
+      var d=document.createElement('div'); d.className='legend';
+      d.innerHTML=PH.map(function(p){return '<div class="legend-item"><i style="background:'+p.color+'"></i>'+p.name+'</div>';}).join('')+
+        '<div style="margin-top:6px;font-size:0.65em;color:#555">⬤ 休整/深度游 &nbsp; ○ 骑行过夜 &nbsp; <span style="color:#f39c12">◇</span> 绕行推荐 &nbsp; <span style="color:#3498db">·</span> 沿途可见</div>';
+      return d;
+    };
+    legend.addTo(map);
+
+    map.fitBounds(DAYS.map(function(d){return [d.lat,d.lng];}),{padding:[30,30]});
+  } catch(e) {
+    document.getElementById('map').innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;text-align:center;padding:40px">🗺️ 地图渲染失败<br><span style="font-size:0.7em">'+e.message+'</span></div>';
+  }
+}
+tryInitMap();
+
+// ==================== INTERACTION ====================
+function selectCity(city,lat,lng){
+  document.querySelectorAll('.day-row').forEach(function(r){r.classList.remove('sel');});
+  var fd=DAYS.find(function(d){return d.city===city;});
+  if(fd){var row=document.getElementById('row-'+fd.d);if(row)row.classList.add('sel');}
+  if(map){try{map.flyTo([lat,lng],10,{duration:0.6});}catch(e){}}
+
+  var cd=CITY[city];if(!cd)return;
+  var ph=PH.find(function(p){return fd&&fd.d>=p.days[0]&&fd.d<=p.days[1];});
+  var daysHere=DAYS.filter(function(d){return d.city===city;});
+
+  var h='<div class="card"><h3>'+city+'</h3><div class="emoji-hero">'+cd.hero+'</div>';
+  h+='<p class="desc"><strong style="color:#fff">'+cd.desc+'</strong></p>';
+  h+='<p style="font-size:0.72em;color:#555;margin-top:3px">'+daysHere.map(function(d){return 'Day '+d.d;}).join(' / ')+'</p></div>';
+
+  // Road
+  h+='<div class="card"><div class="sec"><h4>🛣️ 骑行路书</h4>';
+  h+='<p><strong>出发：</strong>'+cd.road.from+'</p>';
+  h+='<div class="route-code">'+cd.road.via+'</div>';
+  h+='<p style="margin-top:4px"><strong>路面：</strong>'+cd.road.surface+'<br><strong>加油：</strong>'+cd.road.gas+'</p>';
+  if(cd.road.note)h+='<div class="warn">💡 '+cd.road.note+'</div>';
+  h+='</div></div>';
+
+  // Stay
+  h+='<div class="card"><div class="sec"><h4>🏨 住宿</h4><ul>';
+  cd.stay.forEach(function(s){h+='<li><strong>'+s.name+'</strong> <span style="color:#555;font-size:0.72em">'+s.price+'</span><br><span style="color:#888">'+s.why+'</span></li>';});
+  h+='</ul></div></div>';
+
+  // Along
+  h+='<div class="card"><div class="sec"><h4>📍 本站及沿途</h4>';
+  cd.along.forEach(function(a){
+    h+='<div class="along-item"><span class="along-badge '+a.cls+'">'+a.badge+'</span><span class="along-text">'+a.text+'</span></div>';
+  });
+  h+='</div></div>';
+
+  // Food
+  h+='<div class="card"><div class="sec"><h4>🍜 食</h4><ul>';
+  cd.food.forEach(function(f){h+='<li>'+f+'</li>';});
+  h+='</ul></div></div>';
+
+  // Warn
+  if(cd.warn)h+='<div class="card"><div class="warn" style="font-size:0.82em">⚠️ '+cd.warn+'</div></div>';
+
+  document.getElementById('detailContent').innerHTML=h;
+  switchTab('detail');
+}
+
+function switchTab(t){
+  document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('active');});
+  document.querySelectorAll('.tab-content').forEach(function(x){x.classList.remove('active');});
+  if(t==='list'){
+    document.querySelector('.tab:first-child').classList.add('active');
+    document.getElementById('listContent').classList.add('active');
+  } else {
+    document.querySelectorAll('.tab')[1].classList.add('active');
+    document.getElementById('detailContent').classList.add('active');
+  }
+}
+
+function flyToPhase(id){
+  if(!map)return;
+  var ds=DAYS.filter(function(d){return d.d>=PH.find(function(p){return p.id===id;}).days[0]&&d.d<=PH.find(function(p){return p.id===id;}).days[1];});
+  var lats=ds.map(function(d){return d.lat;}),lngs=ds.map(function(d){return d.lng;});
+  try{map.flyTo([(Math.min.apply(null,lats)+Math.max.apply(null,lats))/2,(Math.min.apply(null,lngs)+Math.max.apply(null,lngs))/2],7,{duration:0.6});}catch(e){}
+}
+</script>
+</body>
+</html>

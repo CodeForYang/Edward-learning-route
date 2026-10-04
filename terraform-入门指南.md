@@ -2877,14 +2877,38 @@ terraform import <resource_type>.<name> <id>
 
 ---
 
-## 🏋️ 综合练习题：多环境配置管家系统
+## 🏋️ 综合练习题：三层架构基础设施实战
 
 > 📍 所有代码写完后统一放到 `/Users/yangpei/Desktop/k8s/terraform-learning/practice/` 目录下
-> 🎯 目标：检验你对**模块化、变量校验、count/for_each 差异化使用、lifecycle、数据源、远程后端、多环境配置**的掌握
+> 🎯 目标：检验你对**模块化、模块间引用、变量校验、count/for_each 差异化使用、lifecycle、数据源、远程后端、多环境配置**的掌握
 
 ### 项目背景
 
-你需要为公司搭建一套"配置管家"系统，`config-service` 模块为每个环境（dev/staging/prod）生成不同风格的配置文件。整个项目必须满足生产级规范。
+你需要为公司搭建一套完整的三层基础设施，包含三个模块协同工作：
+
+```text
+┌──────────────────────────────────────────────┐
+│                   app 模块                     │
+│         ALB + EC2（应用层）                     │
+│         引用 networking 的 VPC + 子网            │
+├──────────────────────────────────────────────┤
+│                 db-infra 模块                  │
+│     SSM参数 + KMS密钥 + S3备份（数据层）          │
+│         引用 networking 的 VPC                  │
+├──────────────────────────────────────────────┤
+│               networking 模块                   │
+│         VPC + 子网 + IGW（网络层）                │
+│         不依赖其他模块，是整个系统的基础              │
+└──────────────────────────────────────────────┘
+```
+
+- **networking**（Day 5 成果）：创建 VPC、子网、互联网网关，是整个系统的"地基"
+- **db-infra**（本次新建）：创建 SSM 参数、KMS 密钥、S3 备份桶，管理数据库基础设施
+- **app**（Day 6 成果）：创建安全组、ALB、EC2 实例，跑在 networking 提供的 VPC 上
+
+**三个模块的运行环境由 networking 统一提供**：db-infra 和 app 都引用 `module.networking.vpc_id`，这是真实项目中"网络先行、其他依赖网络"的标准模式。
+
+> 💰 **费用提醒**：本练习中 networking 模块（VPC + 子网 + IGW）和 db-infra 模块（KMS + SSM + S3）免费或极低成本（每月几分到几毛）。app 模块的 ALB（~$20/月）+ EC2（~$8/月起）有一定费用。**建议**：全部 deploy 完验证语法后立刻 destroy；或者先注释掉 app 模块只跑 networking + db-infra（已覆盖全部语法考点）。
 
 ---
 
@@ -2893,15 +2917,23 @@ terraform import <resource_type>.<name> <id>
 ```text
 practice/
 ├── modules/
-│   └── config-service/          ← 你写的可复用模块
+│   ├── networking/               ← 从 Day 5 复制过来（你已经写好的）
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   ├── app/                      ← 从 Day 6 复制过来（你已经写好的）
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   └── db-infra/                 ← 🆕 本次新建的数据库基础模块
 │       ├── main.tf
 │       ├── variables.tf
 │       └── outputs.tf
 ├── environments/
 │   ├── dev/
-│   │   ├── main.tf              ← 调用 config-service 模块
-│   │   ├── backend.tf           ← S3 远程后端配置
-│   │   └── terraform.tfvars     ← dev 的变量值
+│   │   ├── main.tf               ← 调用全部三个模块，传递 dev 参数
+│   │   ├── backend.tf            ← S3 远程后端配置
+│   │   └── terraform.tfvars
 │   ├── staging/
 │   │   ├── main.tf
 │   │   ├── backend.tf
@@ -2910,15 +2942,20 @@ practice/
 │       ├── main.tf
 │       ├── backend.tf
 │       └── terraform.tfvars
-├── bootstrap.sh                 ← 创建 S3 state 桶的脚本
-└── .gitignore                   ← 排除 .terraform/ *.tfstate 等
+├── bootstrap.sh                  ← 创建 S3 state 桶的脚本
+└── .gitignore
 ```
+
+> 📋 **第一步**：先把 Day 5 和 Day 6 的模块复制过来
+> ```bash
+> mkdir -p /Users/yangpei/Desktop/k8s/terraform-learning/practice/modules
+> cp -r /Users/yangpei/Desktop/k8s/terraform-learning/modules/networking practice/modules/
+> cp -r /Users/yangpei/Desktop/k8s/terraform-learning/modules/app practice/modules/
+> ```
 
 ---
 
-### 🧩 2. config-service 模块需求
-
-这个模块用 `local_file` + `random` provider 生成配置文件（不花钱，同时检验你对 provider 的掌握）。
+### 🧩 2. db-infra 模块需求（本次新建）
 
 #### 2.1 `variables.tf` —— 变量定义
 
@@ -2927,31 +2964,24 @@ practice/
 | 变量名 | 类型 | 必须/可选 | 要求 |
 | ----------- | -------- | -------------- | -------- |
 | `environment` | `string` | **必须** (无 default) | ⚠️ 校验：只允许 `dev`/`staging`/`prod`，否则报错 |
-| `project_name` | `string` | 可选 | 默认 `"config-service"` |
+| `project_name` | `string` | 可选 | 默认 `"db-infra"` |
+| `vpc_id` | `string` | **必须** (无 default) | 目标 VPC ID —— **由 networking 模块的 output 传入** |
 | `replicas` | `number` | 可选 | 默认 `1`，校验：必须在 1~10 之间 |
 | `enable_backup` | `bool` | 可选 | 默认 `true` |
 | `feature_flags` | `list(string)` | 可选 | 默认 `["logging", "monitoring"]` |
-| `app_config` | `map(string)` | **必须** (无 default) | 环境特定的配置键值对（如 region / log_level / endpoint） |
+| `db_config` | `map(string)` | **必须** (无 default) | 数据库配置键值对（如 engine / version / instance_class / db_name） |
 | `tags` | `map(string)` | 可选 | 默认 `{ Owner = "platform-team" }` |
-| `instance_config` | `object({size=string, disk=number})` | 可选 | 默认 `{ size = "t3.micro", disk = 20 }` |
-
-#### 易错点提醒
-
-- `environment` 没有 default —— 调用方必须显式传值，否则 Terraform 会在 apply 时交互式提示输入
-- `feature_flags` 的默认值是**静态列表**，后续要注意它和 `for_each` 的配合
 
 #### 2.2 `main.tf` —— 核心逻辑
-
-需要实现以下内容：
 
 ##### a) Provider 声明
 
 ```hcl
 terraform {
   required_providers {
-    local = {
-      source  = "hashicorp/local"
-      version = "~> 2.5"
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
     }
     random = {
       source  = "hashicorp/random"
@@ -2963,67 +2993,143 @@ terraform {
 
 ##### b) Locals 计算
 
-计算以下本地值：
-
 | 本地值名 | 计算逻辑 |
 | --------- | --------- |
-| `full_name` | `project_name-environment` 格式拼接 |
+| `full_name` | `${var.project_name}-${var.environment}` |
 | `log_level` | 三目运算：prod → `"warn"`，staging → `"info"`，其他 → `"debug"` |
-| `effective_replicas` | prod 环境 replicas × 2，其他环境不变 |
+| `effective_replicas` | prod 环境 `var.replicas * 2`，其他环境不变 |
 | `all_tags` | 合并传入的 tags + `{Name, Environment, Backup}` 三个标签 |
 | `upper_flags` | 用 `for` 表达式将 `feature_flags` 转为大写 |
 
-##### c) Random 资源
+##### c) Random 资源 —— 自动生成唯一后缀和密码
 
-- `random_string` 后缀资源：length 8，不含特殊字符，仅小写字母
+```hcl
+resource "random_string" "suffix" {
+  length  = 8
+  special = false
+  upper   = false
+}
 
-##### d) 主配置文件 —— 用 `for_each` 批量创建
+resource "random_password" "db" {
+  length  = 16
+  special = true
+}
+```
 
-对 `var.app_config` 的每个 key 用 `for_each` 创建一个 `local_file`：
+##### d) SSM Parameter Store —— 用 `for_each` 批量创建
 
-- 文件名：`${local.full_name}-${each.key}.conf`
-- 内容：项目名、环境、该配置 key 的值、replicas、backup 状态、suffix
-- 每个 key 生成一个独立的文件
+对 `var.db_config` 的每个 key 用 `for_each` 创建一个 `aws_ssm_parameter`：
+
+```hcl
+resource "aws_ssm_parameter" "config" {
+  for_each = var.db_config
+
+  name  = "/${var.environment}/${var.project_name}/${each.key}"
+  type  = "String"
+  value = each.value
+  tags  = local.all_tags
+}
+```
+
+参数名示例：`/dev/db-infra/engine`、`/dev/db-infra/version`、`/dev/db-infra/instance_class`
 
 > 💡 **易错点**：`for_each` 要求 map 或 set(string) 类型。如果尝试对 list 使用 `for_each`，Terraform 会报错，需要 `toset()` 转换。
 
-##### e) 汇总文件 —— 用 `count` 创建
+##### e) S3 备份桶 —— 用 `count` 条件创建
 
-- 创建一个汇总 json 文件：`${local.full_name}-summary.json`
-- 内容包含所有配置信息 + feature_flags + tags
-- 用 `count = 1` 控制
+```hcl
+resource "aws_s3_bucket" "backup" {
+  count = var.enable_backup ? 1 : 0
 
-> 💡 **易错点**：`count` 和 `for_each` 的核心区别 —— count 用数字索引，中间插入/删除元素会导致后续资源被重建；for_each 用 key 管理，增删不影响其他资源。
+  bucket = "${var.project_name}-${var.environment}-backup-${random_string.suffix.result}"
+  tags   = local.all_tags
+}
 
-##### f) Lifecycle 规则
+resource "aws_s3_bucket_versioning" "backup" {
+  count = var.enable_backup ? 1 : 0
 
-在汇总文件资源上设置：
+  bucket = aws_s3_bucket.backup[0].id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+```
 
-- `create_before_destroy = true`
-- 忽略 `content` 属性的外部变更
+> 💡 **易错点**：`count` 和 `for_each` 的核心区别 —— count 用数字索引，中间插入/删除元素会导致后续资源被重建；for_each 用 key 管理，增删不影响其他资源。注意访问 count 资源时必须用 `[0]` 索引。
 
-##### g) 数据源
+##### f) KMS 密钥 —— Lifecycle 规则
 
-- 使用 `data.local_file` 读取主配置文件中的**第一个**（通过 `keys()` 函数动态取第一个 key）
-- 思考：如果用硬编码 `[0]` 索引取 `for_each` 创建的文件会有什么问题？
+```hcl
+resource "aws_kms_key" "db" {
+  description             = "KMS key for ${local.full_name} database encryption"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true
+  tags                    = local.all_tags
 
-> ⚠️ 数据源是在 `terraform plan` 阶段读取的，所以必须先 apply 创建文件后，数据源才能读到内容。这意味着**第一次 apply 可能报错**，需要 apply 两次 —— 这是 `data` 和 `resource` 在生命周期上的本质差异。
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes  = [tags]
+  }
+}
+```
+
+> ⚠️ **重要**：`prevent_destroy` 意味着 `terraform destroy` 会报错！练习完成后需要先注释掉这一行，apply 一次，然后才能 destroy。
+
+##### g) 数据源 —— 读取已创建的资源
+
+**数据源 ①**：读取 `for_each` 创建的 SSM 参数中的第一个
+
+```hcl
+data "aws_ssm_parameter" "first_config" {
+  name       = aws_ssm_parameter.config[sort(keys(var.db_config))[0]].name
+  depends_on = [aws_ssm_parameter.config]
+}
+```
+
+思考：为什么用 `sort(keys(...))[0]` 而不是直接用 `[0]`？`for_each` 创建的是 map，没有数字索引；且 map 的 key 顺序不固定，需要排序后才能稳定取"第一个"。
+
+**数据源 ②**：读取 AWS 账号和区域信息（真实项目中几乎每个模块都会用）
+
+```hcl
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+```
+
+> ⚠️ `data.aws_ssm_parameter.first_config` 在 `terraform plan` 阶段执行，所以在第一次 apply 时 SSM 参数还不存在，会报错。需要 apply 两次 —— 这是 `data` 和 `resource` 在生命周期上的本质差异。
 
 #### 2.3 `outputs.tf` —— 暴露结果
 
 | 输出名 | 内容 | 特殊要求 |
 | -------- | ------ | --------- |
-| `config_files` | 生成的 config 文件路径列表 (map) | 用 `values()` 提取 |
-| `summary_file` | 汇总文件路径 | - |
-| `sample_config_content` | 数据源读取到的配置文件内容 | - |
-| `connection_string` | 模拟的数据库连接串 | **sensitive = true**，内容拼接 random 后缀 |
-| `all_tags` | 最终合并后的完整标签 | - |
+| `config_param_names` | 所有 SSM 参数名 map | 用 `values()` 提取 |
+| `backup_bucket_name` | 备份桶名称 | 若未启用备份，输出空字符串（用 `try()` 处理） |
+| `sample_param_value` | 数据源读取到的第一个 SSM 参数值 | - |
+| `connection_string` | 模拟的数据库连接串 | **sensitive = true** |
+| `kms_key_arn` | KMS 密钥 ARN | - |
+| `all_tags` | 合并后的完整标签 | - |
+
+```hcl
+output "backup_bucket_name" {
+  value       = try(aws_s3_bucket.backup[0].id, "")
+  description = "Backup bucket name (empty if backup is disabled)"
+}
+
+output "connection_string" {
+  value     = "postgresql://admin:${random_password.db.result}@${local.full_name}.${data.aws_region.current.name}.rds.amazonaws.com:5432/${var.environment}"
+  sensitive = true
+}
+
+output "sample_param_value" {
+  value = data.aws_ssm_parameter.first_config.value
+}
+```
 
 ---
 
-### 🌍 3. 多环境配置
+### 🌍 3. 环境配置 —— 三层模块联动
 
-每个环境调用同一个 `config-service` 模块，但传入不同参数。
+每个环境的 `main.tf` 是关键亮点：**一个文件串联起 networking → db-infra → app 三个模块**，通过 module 的 output 传递参数。
 
 #### dev 环境
 
@@ -3032,9 +3138,9 @@ terraform {
 ```hcl
 terraform {
   required_providers {
-    local = {
-      source  = "hashicorp/local"
-      version = "~> 2.5"
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
     }
     random = {
       source  = "hashicorp/random"
@@ -3043,16 +3149,31 @@ terraform {
   }
 }
 
-module "config" {
-  source = "../../modules/config-service"
+provider "aws" {
+  region = "ap-northeast-1"
+}
 
-  environment   = "dev"
-  project_name  = "config-service"
-  replicas      = 1
-  app_config = {
-    region    = "ap-northeast-1"
-    log_level = "debug"
-    endpoint  = "http://localhost:8080"
+# ── 第一层：网络层 ──
+module "networking" {
+  source   = "../../modules/networking"
+  vpc_cidr = "10.0.0.0/16"
+  env      = "dev"
+}
+
+# ── 第二层：数据层 ──
+# ⚡ 引用 networking 模块的 vpc_id —— 模块间联动
+module "db_infra" {
+  source = "../../modules/db-infra"
+
+  environment  = "dev"
+  project_name = "db-infra"
+  vpc_id       = module.networking.vpc_id    # ← 来自 networking 模块的输出
+  replicas     = 1
+  db_config = {
+    engine         = "postgres"
+    version        = "16.3"
+    instance_class = "db.t3.micro"
+    db_name        = "devdb"
   }
   feature_flags = ["logging", "debug_mode"]
   tags = {
@@ -3061,10 +3182,39 @@ module "config" {
   }
 }
 
-output "all_outputs" {
-  value = module.config
+# ── 第三层：应用层 ──
+# 💰 app 模块包含 ALB（~$20/月）和 EC2，如果只是想练语法可以先注释掉这一段
+module "app" {
+  source = "../../modules/app"
+
+  env           = "dev"
+  instance_type = "t3.micro"
+  replicas      = 1
+
+  vpc_id            = module.networking.vpc_id       # ← 来自 networking 模块
+  public_subnet_ids = module.networking.subnet_ids   # ← 来自 networking 模块
+}
+
+# ── 综合输出：查看三个模块的产出 ──
+output "vpc_id" {
+  value = module.networking.vpc_id
+}
+
+output "db_kms_key_arn" {
+  value = module.db_infra.kms_key_arn
+}
+
+output "app_alb_dns" {
+  value = module.app.alb_dns_name
+}
+
+output "db_outputs" {
+  value     = module.db_infra
+  sensitive = true   # 因为 connection_string 是 sensitive
 }
 ```
+
+**关键观察**：`module.networking.vpc_id` 被两个下游模块同时引用 —— 这正是在一个环境中共享基础设施的标准模式。
 
 **`environments/dev/backend.tf`**：
 
@@ -3089,43 +3239,121 @@ terraform {
 }
 ```
 
-**`environments/dev/terraform.tfvars`**（可选，如果你用 main.tf 直接传值可以省略，示例供参考）：
+**`environments/dev/terraform.tfvars`**（可选，但如果 main.tf 里变量值写死了可以省略）：
 
 ```hcl
-environment   = "dev"
-replicas      = 1
-app_config = {
-  region    = "ap-northeast-1"
-  log_level = "debug"
-  endpoint  = "http://localhost:8080"
-}
-feature_flags = ["logging", "debug_mode"]
+# 仅用于 networking 和 app 模块（这两个模块没有在 main.tf 里内联所有变量值时用到）
 ```
 
 #### staging 环境
 
-**`environments/staging/main.tf`**：
+**`environments/staging/main.tf`** —— 与 dev 相比的关键差异：
 
-- 使用相同的 module source
-- `environment = "staging"`，`replicas = 2`
-- `app_config` 增加 `cache_ttl = "300"` 配置项
-- `feature_flags = ["logging", "monitoring", "cache"]`
+```hcl
+provider "aws" {
+  region = "ap-northeast-1"
+}
 
-**`environments/staging/backend.tf`**：
+module "networking" {
+  source   = "../../modules/networking"
+  vpc_cidr = "10.1.0.0/16"             # ← staging 用不同的 CIDR
+  env      = "staging"
+}
 
-- 与 dev 的区别只在 `key = "staging/terraform.tfstate"`
+module "db_infra" {
+  source = "../../modules/db-infra"
+
+  environment  = "staging"
+  project_name = "db-infra"
+  vpc_id       = module.networking.vpc_id
+  replicas     = 2
+  db_config = {
+    engine         = "postgres"
+    version        = "16.3"
+    instance_class = "db.t3.small"      # ← staging 规格更大
+    db_name        = "stagingdb"
+    storage_gb     = "100"              # ← 增加配置项（更多 SSM 参数）
+  }
+  feature_flags = ["logging", "monitoring", "cache"]
+  tags = {
+    Owner = "staging-team"
+    Env   = "staging"
+  }
+}
+
+# 💰 app 模块 —— 如需省钱可注释掉
+module "app" {
+  source = "../../modules/app"
+
+  env           = "staging"
+  instance_type = "t3.small"
+  replicas      = 2
+
+  vpc_id            = module.networking.vpc_id
+  public_subnet_ids = module.networking.subnet_ids
+}
+```
+
+**`environments/staging/backend.tf`** —— 与 dev 的唯一区别：
+
+```hcl
+backend "s3" {
+  # ... 其他配置与 dev 相同，只有 key 不同 ...
+  key = "staging/terraform.tfstate"
+}
+```
 
 #### prod 环境
 
-**`environments/prod/main.tf`**：
+**`environments/prod/main.tf`** —— prod 的特征：
 
-- `environment = "prod"`，`replicas = 3`
-- `app_config` 增加 `auth_method = "iam"` 配置项
-- `feature_flags = ["logging", "monitoring", "cache", "audit"]`
+```hcl
+provider "aws" {
+  region = "ap-northeast-1"
+}
 
-**`environments/prod/backend.tf`**：
+module "networking" {
+  source   = "../../modules/networking"
+  vpc_cidr = "10.2.0.0/16"             # ← prod 用独立的 CIDR
+  env      = "prod"
+}
 
-- `key = "prod/terraform.tfstate"`
+module "db_infra" {
+  source = "../../modules/db-infra"
+
+  environment  = "prod"
+  project_name = "db-infra"
+  vpc_id       = module.networking.vpc_id
+  replicas     = 3
+  db_config = {
+    engine         = "postgres"
+    version        = "16.3"
+    instance_class = "db.t3.large"      # ← prod 最大规格
+    db_name        = "proddb"
+    storage_gb     = "500"
+    multi_az       = "true"             # ← prod 才有的高可用配置
+  }
+  feature_flags = ["logging", "monitoring", "cache", "audit"]
+  tags = {
+    Owner = "prod-team"
+    Env   = "prod"
+  }
+}
+
+# 💰 prod 的 app 模块费用最高（t3.large × 5 + ALB），练习时建议注释掉
+module "app" {
+  source = "../../modules/app"
+
+  env           = "prod"
+  instance_type = "t3.large"
+  replicas      = 5
+
+  vpc_id            = module.networking.vpc_id
+  public_subnet_ids = module.networking.subnet_ids
+}
+```
+
+**`environments/prod/backend.tf`**：`key = "prod/terraform.tfstate"`
 
 > ⚠️ **灾难性错误**：如果三个环境用了相同的 S3 key，它们会共享同一个 state 文件 —— 一个环境 apply 会覆盖另一个环境的 state 记录，造成配置混乱。**不同环境必须用不同 key**。
 
@@ -3160,41 +3388,63 @@ feature_flags = ["logging", "debug_mode"]
 
 ---
 
-### ▶️ 6. 运行流程（验证你的实现）
+### ▶️ 6. 运行流程
 
 ```bash
-# 1. 先跑 bootstrap 创建 S3 桶
-cd /Users/yangpei/Desktop/k8s/terraform-learning/practice
+# 0. 先把 Day 5 和 Day 6 的模块复制过来
+cd /Users/yangpei/Desktop/k8s/terraform-learning
+mkdir -p practice/modules
+cp -r modules/networking practice/modules/
+cp -r modules/app practice/modules/
+
+# 1. 创建 db-infra 模块（三文件：main.tf / variables.tf / outputs.tf）
+#    然后创建三个环境的目录和文件
+
+# 2. 先跑 bootstrap 创建 S3 桶
+cd practice
 bash bootstrap.sh <你的名字>-tfstate
 
-# 2. 部署 dev 环境
+# 3. 部署 dev 环境
 cd environments/dev
 terraform init
 terraform fmt
 terraform validate
 terraform plan
-terraform apply -auto-approve
 
-# 3. 部署 staging 环境
+# ⚠️ 第一次 apply 可能报错：data.aws_ssm_parameter.first_config 读不到
+#    因为 SSM 参数还没创建 —— 这是正常的！再 apply 一次即可
+terraform apply -auto-approve
+terraform apply -auto-approve   # 第二次运行，数据源就能读到了
+
+# 4. 部署 staging 环境
 cd ../staging
 terraform init
 terraform plan
 terraform apply
 
-# 4. 部署 prod 环境
+# 5. 部署 prod 环境
 cd ../prod
 terraform init
 terraform plan
 terraform apply
 
-# 5. 查看输出（观察 sensitive 值的行为）
+# 6. 查看输出（观察 sensitive 值和模块间引用）
 cd ../dev
-terraform output
-terraform output -json connection_string
+terraform output                     # connection_string 显示为 <sensitive>
+terraform output db_kms_key_arn      # 确认 KMS key 已创建
+terraform output app_alb_dns         # 确认 ALB DNS（如果启用了 app 模块）
 
-# 6. 演示易错点（故意制造错误，验证你的代码能防御）：
+# 7. 验证 AWS 资源确实创建了
+aws ssm get-parameters-by-path --path /dev/db-infra --region ap-northeast-1
+aws s3 ls | grep backup
+aws kms list-keys --region ap-northeast-1
+aws ec2 describe-vpcs --region ap-northeast-1 --filters Name=tag:Env,Values=dev
+
+# 8. 演示易错点（故意制造错误，验证你的代码能防御）：
 #    a) 改 tfvars 中 environment = "dev2" → validate 应报校验错误
 #    b) 改 replicas = 0 → validate 应报校验错误
+#    c) 改 replicas = 11 → validate 应报校验错误
+#    d) 把 networking 模块注释掉 → db-infra 和 app 应报错（vpc_id 无值）
 ```
 
 ---
@@ -3210,16 +3460,48 @@ terraform output -json connection_string
 - [ ] 后端配置 `backend "s3"` 中三个环境的 `key` 是否确保不同？
 - [ ] `terraform fmt` 是否在所有 .tf 文件上统一执行过？
 - [ ] `terraform validate` 在 `init` 之前跑会报错吗？
-- [ ] 数据源读取 `for_each` 创建的文件时，用第几个 key 来读？硬编码 `[0]` 是否安全？
+- [ ] 数据源读取 `for_each` 创建的资源时，`sort(keys(...))[0]` 和直接 `[0]` 有什么区别？
 - [ ] `.terraform.lock.hcl` 应该 commit 还是 gitignore？
+- [ ] S3 桶名包含 random_suffix，每次 apply 会怎样？（提示：思考 `lifecycle { ignore_changes }` 的必要性）
+- [ ] KMS key 有 `prevent_destroy`，执行 `terraform destroy` 会发生什么？
+- [ ] **三个模块的依赖链是怎样的？**画一下 `module.networking` → `module.db_infra` / `module.app` 的依赖图
+- [ ] 如果 staging 不用备份（`enable_backup = false`），backup 桶会怎样？output 能正确处理吗？
 
 ---
 
 ### 🧹 8. 清理
 
 ```bash
-# 验证无误后，销毁所有环境
-cd /Users/yangpei/Desktop/k8s/terraform-learning/practice/environments/dev && terraform destroy -auto-approve
+# ⚠️ 清理前：
+#    1. 注释掉 db-infra 模块中 KMS key 的 prevent_destroy
+#    2. 在三个环境目录分别 terraform apply，让这个改动生效
+#    3. 然后才能 destroy
+
+cd /Users/yangpei/Desktop/k8s/terraform-learning/practice
+
+# 先让 prevent_destroy 失效（三个环境都要！）
+cd environments/dev && terraform apply -auto-approve
+cd ../staging && terraform apply -auto-approve
+cd ../prod && terraform apply -auto-approve
+
+# 再销毁所有环境
+cd ../dev && terraform destroy -auto-approve
 cd ../staging && terraform destroy -auto-approve
 cd ../prod && terraform destroy -auto-approve
+
+# 最后删掉 S3 state 桶（如果不再需要）
+aws s3 rb s3://<你的名字>-tfstate --force --region ap-northeast-1
 ```
+
+---
+
+### 🎓 9. 你从这个练习中学到了什么
+
+完成这个练习后，你应该能回答以下问题：
+
+1. **模块化**：为什么把 networking、db-infra、app 拆成独立模块？直接写在一个大文件里有什么问题？
+2. **模块间引用**：`module.networking.vpc_id` 是怎么跨模块传递的？依赖链是什么？
+3. **for_each vs count**：什么时候用 for_each 管理 SSM 参数？什么时候用 count 控制备份桶？
+4. **lifecycle**：`prevent_destroy` 保护的是什么？为什么 KMS 密钥需要这个？
+5. **数据源生命周期**：为什么 `data.aws_ssm_parameter` 第一次 apply 会失败？这和 resource 有什么本质区别？
+6. **多环境隔离**：dev/staging/prod 的 state 文件、CIDR、配置参数分别是如何隔离开的？
